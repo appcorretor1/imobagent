@@ -1,0 +1,21 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Grid dos KPIs do dashboard */
+.dashboard-grid {
+    display: grid;
+    grid-template-columns: 1fr;      /* mobile: 1 coluna */
+    gap: 1rem;
+}
+
+@media (min-width: 768px) {
+    .dashboard-grid {
+        grid-template-columns: repeat(var(--cols, 4), minmax(0, 1fr));
+    }
+}
+
+/* Opcional: barra de teste azul/vermelha */
+.test-tailwind-card {
+    @apply bg-red-500 md:bg-blue-500 rounded-xl shadow p-4 text-white;
+}
