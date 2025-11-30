@@ -322,11 +322,29 @@ if ($thread && $thread->selected_empreendimento_id) {
                 return $this->sendText($phone, $listText . "\n\nResponda com os números (ex.: 1,2,5)." . $this->footerControls());
             }
 
-            // B) Índices com lista em cache → enviar como documento/mídia
-            // B) Índices com lista em cache → enviar como documento/mídia ou link de fotos
+          
+           // B) Índices com lista em cache → enviar como documento/mídia ou link de fotos
 if ($this->isMultiIndexList($text) && Cache::has($filesKey)) {
+    Log::info('WPP arquivos: bloco B acionado (índices + cache)', [
+        'phone'    => $phone,
+        'msg'      => $text,
+        'filesKey' => $filesKey,
+    ]);
+
     $indices = $this->parseIndices($text);
+
+    Log::info('WPP arquivos: índices parseados', [
+        'phone'   => $phone,
+        'msg'     => $text,
+        'indices' => $indices,
+    ]);
+
     if (empty($indices)) {
+        Log::warning('WPP arquivos: parseIndices vazio', [
+            'phone' => $phone,
+            'msg'   => $text,
+        ]);
+
         return $this->sendText(
             $phone,
             'Não entendi os números enviados. Tente algo como: 1,2,5' . $this->footerControls()
@@ -334,6 +352,13 @@ if ($this->isMultiIndexList($text) && Cache::has($filesKey)) {
     }
 
     $items = Cache::get($filesKey, []);
+    Log::info('WPP arquivos: items recuperados do cache', [
+        'phone'    => $phone,
+        'filesKey' => $filesKey,
+        'qtde'     => count($items),
+        'items'    => $items,
+    ]);
+
     $byIdx = collect($items)->keyBy('index');
 
     $picked = [];
@@ -343,6 +368,12 @@ if ($this->isMultiIndexList($text) && Cache::has($filesKey)) {
         }
     }
 
+    Log::info('WPP arquivos: items selecionados pelos índices', [
+        'phone'   => $phone,
+        'indices' => $indices,
+        'picked'  => $picked,
+    ]);
+
     if (empty($picked)) {
         return $this->sendText(
             $phone,
@@ -350,21 +381,40 @@ if ($this->isMultiIndexList($text) && Cache::has($filesKey)) {
         );
     }
 
-    Log::info('WPP arquivos: iniciando envio', ['phone' => $phone, 'count' => count($picked)]);
+    Log::info('WPP arquivos: iniciando envio', [
+        'phone' => $phone,
+        'count' => count($picked),
+    ]);
+
     $this->sendText($phone, "⏳ Enviando *" . count($picked) . "* item(s)…");
 
-    $sent           = 0;
-    $vias           = [];
-    $hasFotosBundle = false;
+    $sent = 0;
+    $vias = [];
 
     foreach ($picked as $pitem) {
-        // NOVO: se for o bundle de fotos, manda só o link
-        if (($pitem['type'] ?? 'file') === 'photos_bundle') {
-            $hasFotosBundle = true;
+        $type = $pitem['type'] ?? 'file';
+
+        Log::info('WPP arquivos: processando item selecionado', [
+            'phone' => $phone,
+            'item'  => $pitem,
+            'type'  => $type,
+        ]);
+
+        // 👉 Se for o bundle de fotos: envia só o link
+        if ($type === 'photos_bundle') {
+            Log::info('WPP arquivos: item é bundle de fotos, enviando link em vez de mídia', [
+                'phone' => $phone,
+                'item'  => $pitem,
+            ]);
 
             $urlFotos = route('empreendimentos.fotos', [
                 'company'  => $companyId,
                 'empreend' => $empId,
+            ]);
+
+            Log::info('WPP arquivos: URL de fotos gerada', [
+                'phone'    => $phone,
+                'urlFotos' => $urlFotos,
             ]);
 
             $this->sendText(
@@ -373,19 +423,35 @@ if ($this->isMultiIndexList($text) && Cache::has($filesKey)) {
                 "🔗 {$urlFotos}"
             );
 
+            // NÃO incrementa $sent aqui, é só link
             continue;
         }
 
-        // arquivos "normais" seguem igual antes
-        Log::info('Z-API envio: preparando', [
-            'file'  => $pitem['name'],
+        // 👉 Arquivo normal (PDF, etc.) segue fluxo padrão
+        Log::info('Z-API envio: preparando arquivo normal', [
+            'file'  => $pitem['name'] ?? null,
             'phone' => $phone,
-            's3'    => $pitem['path'],
+            's3'    => $pitem['path'] ?? null,
+            'mime'  => $pitem['mime'] ?? null,
         ]);
 
-        $res = $this->sendMediaSmart($phone, $pitem['path'], $pitem['name'], $pitem['mime']); // sempre array
+        $res = $this->sendMediaSmart(
+            $phone,
+            $pitem['path'] ?? '',
+            $pitem['name'] ?? '',
+            $pitem['mime'] ?? null
+        );
+
         $vias[] = $res['via'] ?? 'n/a';
-        if (!empty($res['ok'])) $sent++;
+
+        if (!empty($res['ok'])) {
+            $sent++;
+        }
+
+        Log::info('WPP arquivos: resultado sendMediaSmart', [
+            'phone' => $phone,
+            'res'   => $res,
+        ]);
     }
 
     if ($sent > 0) {
@@ -402,6 +468,12 @@ if ($this->isMultiIndexList($text) && Cache::has($filesKey)) {
             (env('WPP_DEBUG') ? " via: " . implode(', ', array_unique($vias)) : "") .
             " Se não aparecerem, responda novamente os números." . $this->footerControls()
         );
+    } else {
+        Log::info('WPP arquivos: nenhum arquivo enviado (possivelmente só bundle de fotos)', [
+            'phone'     => $phone,
+            'total'     => count($picked),
+            'temBundle' => collect($picked)->contains(fn($i) => ($i['type'] ?? 'file') === 'photos_bundle'),
+        ]);
     }
 
     return response()->noContent();
@@ -418,60 +490,132 @@ if ($this->isMultiIndexList($text) && Cache::has($filesKey)) {
         }
         // ================== FIM SUPER HARD-GATE ARQUIVOS ==================
 
-        // ===== MINI-GATE: resposta por índices quando já há lista de arquivos em cache =====
-        if (!empty($thread->selected_empreendimento_id) && $this->isMultiIndexList($text)) {
-            $empId    = (int) $thread->selected_empreendimento_id;
-            $filesKey = $this->fileListKey($phone, $empId);
+       // ===== MINI-GATE: resposta por índices quando já há lista de arquivos em cache =====
+if (!empty($thread->selected_empreendimento_id) && $this->isMultiIndexList($text)) {
+    $empId     = (int) $thread->selected_empreendimento_id;
+    $companyId = $this->resolveCompanyIdForThread($thread);
+    $filesKey  = $this->fileListKey($phone, $empId);
 
-            if (Cache::has($filesKey)) {
-                $indices = $this->parseIndices($text);
-                if (empty($indices)) {
-                    return $this->sendText($phone, 'Não entendi os números enviados. Ex.: 1,2,5' . $this->footerControls());
-                }
+    if (Cache::has($filesKey)) {
+        $indices = $this->parseIndices($text);
+        if (empty($indices)) {
+            return $this->sendText(
+                $phone,
+                'Não entendi os números enviados. Ex.: 1,2,5' . $this->footerControls()
+            );
+        }
 
-                $items = Cache::get($filesKey, []);
-                $byIdx = collect($items)->keyBy('index');
+        $items = Cache::get($filesKey, []);
+        $byIdx = collect($items)->keyBy('index');
 
-                $picked = [];
-                foreach ($indices as $i) {
-                    if ($byIdx->has($i)) $picked[] = $byIdx->get($i);
-                }
+        $picked = [];
+        foreach ($indices as $i) {
+            if ($byIdx->has($i)) {
+                $picked[] = $byIdx->get($i);
+            }
+        }
 
-                if (empty($picked)) {
-                    return $this->sendText($phone, 'Esses índices não existem. Diga: *ver arquivos*' . $this->footerControls());
-                }
+        if (empty($picked)) {
+            return $this->sendText(
+                $phone,
+                'Esses índices não existem. Diga: *ver arquivos*' . $this->footerControls()
+            );
+        }
 
-                Log::info('WPP arquivos: iniciando envio', ['phone'=>$phone, 'count'=>count($picked)]);
-                $this->sendText($phone, "⏳ Enviando *".count($picked)."* arquivo(s)…");
+        Log::info('WPP MINI-GATE arquivos: iniciando envio', [
+            'phone'  => $phone,
+            'count'  => count($picked),
+            'items'  => $picked,
+            'empId'  => $empId,
+            'companyId' => $companyId,
+        ]);
 
-                $vias = [];
-                $sent = 0;
+        $this->sendText($phone, "⏳ Enviando *" . count($picked) . "* item(s)…");
 
-                foreach ($picked as $pitem) {
-                    $res = $this->sendMediaSmart($phone, $pitem['path'], $pitem['name'], $pitem['mime']);
-                    $vias[] = $res['via'] ?? 'n/a';
-                    if (!empty($res['ok'])) $sent++;
-                }
+        $vias      = [];
+        $sent      = 0;
+        $temBundle = false;
 
-                Log::info('WPP arquivos: envio finalizado', [
-                    'phone'   => $phone,
-                    'total'   => count($picked),
-                    'enviados'=> $sent,
-                    'vias'    => $vias,
+        foreach ($picked as $pitem) {
+            $type = $pitem['type'] ?? 'file';
+
+            Log::info('WPP MINI-GATE arquivos: processando item selecionado', [
+                'phone' => $phone,
+                'item'  => $pitem,
+                'type'  => $type,
+            ]);
+
+            // 👉 Se for o bundle de fotos: envia só o link com todas as fotos
+            if ($type === 'photos_bundle') {
+                $temBundle = true;
+
+                $urlFotos = route('empreendimentos.fotos', [
+                    'company'  => $companyId,
+                    'empreend' => $empId,
+                ]);
+
+                Log::info('WPP MINI-GATE arquivos: enviando link de fotos do empreendimento', [
+                    'phone'    => $phone,
+                    'urlFotos' => $urlFotos,
                 ]);
 
                 $this->sendText(
                     $phone,
-                    "✅ Envio iniciado de *{$sent}* arquivo(s).".
-                    (env('WPP_DEBUG') ? " via: ".implode(', ', array_unique($vias)) : "").
-                    " Se não aparecerem, responda novamente os números." . $this->footerControls()
+                    "Vou te mandar o link com todas as fotos do empreendimento:\n" .
+                    "🔗 {$urlFotos}"
                 );
 
-                return response()->noContent();
-            } else {
-                return $this->sendText($phone, "Para enviar arquivos, primeiro diga: *ver arquivos*.\nDepois responda com os números (ex.: 1,2,5)." . $this->footerControls());
+                // não chama sendMediaSmart para o bundle
+                continue;
             }
+
+            // Arquivo normal (PDF, XLS, etc.)
+            $res = $this->sendMediaSmart(
+                $phone,
+                $pitem['path'] ?? '',
+                $pitem['name'] ?? '',
+                $pitem['mime'] ?? null
+            );
+
+            $vias[] = $res['via'] ?? 'n/a';
+            if (!empty($res['ok'])) {
+                $sent++;
+            }
+
+            Log::info('WPP MINI-GATE arquivos: resultado sendMediaSmart', [
+                'phone' => $phone,
+                'res'   => $res,
+            ]);
         }
+
+        Log::info('WPP MINI-GATE arquivos: envio finalizado', [
+            'phone'     => $phone,
+            'total'     => count($picked),
+            'enviados'  => $sent,
+            'vias'      => $vias,
+            'temBundle' => $temBundle,
+        ]);
+
+        if ($sent > 0) {
+            $this->sendText(
+                $phone,
+                "✅ Envio iniciado de *{$sent}* arquivo(s)." .
+                (env('WPP_DEBUG') ? " via: " . implode(', ', array_unique($vias)) : "") .
+                " Se não aparecerem, responda novamente os números." . $this->footerControls()
+            );
+        } elseif ($temBundle) {
+            // Só bundle de fotos → já mandamos o link, não precisa texto extra
+        }
+
+        return response()->noContent();
+    } else {
+        return $this->sendText(
+            $phone,
+            "Para enviar arquivos, primeiro peça para eu *ver arquivos*.\n" .
+            "Eu listo e você responde com os números (ex.: 1,2,5)." . $this->footerControls()
+        );
+    }
+}
 
         // ===== MODO CATÁLOGO: perguntar sobre TODOS os empreendimentos (usando texto_ia) =====
         // Só tenta catálogo se não for apenas lista de índices
@@ -1568,16 +1712,27 @@ function cacheAndBuildFilesList(string $filesKey, int $empId, ?int $companyId): 
     if (!$companyId) {
         Cache::put($filesKey, [], now()->addMinutes(10));
         Log::warning('WPP arquivos: companyId NULL - não dá para montar prefixo', [
-            'empId' => $empId, 'filesKey' => $filesKey
+            'empId' => $empId,
+            'filesKey' => $filesKey,
         ]);
         return "Não encontrei arquivos para este empreendimento.";
     }
 
     $prefix = "documentos/tenants/{$companyId}/empreendimentos/{$empId}/";
-    Log::info('WPP arquivos: listando S3', ['prefix' => $prefix, 'empId' => $empId, 'companyId' => $companyId]);
+    Log::info('WPP arquivos: listando S3', [
+        'prefix'    => $prefix,
+        'empId'     => $empId,
+        'companyId' => $companyId,
+    ]);
 
     $disk  = Storage::disk('s3');
     $files = $disk->files($prefix);
+
+    Log::info('WPP arquivos: arquivos brutos do S3', [
+        'prefix' => $prefix,
+        'count'  => count($files),
+        'files'  => $files,
+    ]);
 
     // separa extensões
     $allowedDocs   = ['pdf','doc','docx','xls','xlsx','ppt','pptx','csv','txt'];
@@ -1586,23 +1741,30 @@ function cacheAndBuildFilesList(string $filesKey, int $empId, ?int $companyId): 
 
     $allowed = array_merge($allowedDocs, $allowedImages, $allowedVideos);
 
-    // filtra só extensões permitidas
+    // filtra só extensões permitidas (normalizando para lower)
     $files = array_values(array_filter(
         $files,
-        fn ($p) => in_array(
-            strtolower(pathinfo($p, PATHINFO_EXTENSION)),
-            $allowed,
-            true
-        )
+        function ($p) use ($allowed) {
+            $ext = strtolower(pathinfo($p, PATHINFO_EXTENSION));
+            return in_array($ext, $allowed, true);
+        }
     ));
+
+    Log::info('WPP arquivos: após filtro de extensões permitidas', [
+        'prefix' => $prefix,
+        'count'  => count($files),
+        'files'  => $files,
+    ]);
 
     if (empty($files)) {
         Cache::put($filesKey, [], now()->addMinutes(15));
-        Log::info('WPP arquivos: NENHUM arquivo encontrado no S3', ['prefix' => $prefix]);
+        Log::info('WPP arquivos: NENHUM arquivo encontrado no S3', [
+            'prefix' => $prefix,
+        ]);
         return "Não encontrei arquivos para este empreendimento.";
     }
 
-    // separa documentos x fotos
+    // separar documentos x fotos
     $docFiles   = [];
     $photoFiles = [];
 
@@ -1615,13 +1777,21 @@ function cacheAndBuildFilesList(string $filesKey, int $empId, ?int $companyId): 
         }
     }
 
+    Log::info('WPP arquivos: split docs/fotos', [
+        'prefix'      => $prefix,
+        'qtde_docs'   => count($docFiles),
+        'qtde_fotos'  => count($photoFiles),
+        'docFiles'    => $docFiles,
+        'photoFiles'  => $photoFiles,
+    ]);
+
     usort($docFiles, fn($a, $b) => strcasecmp(basename($a), basename($b)));
 
     $items = [];
     $lines = [];
     $i     = 1;
 
-    // 1) Documentos normais (PDF, XLS etc.)
+    // 1) Documentos normais
     foreach ($docFiles as $path) {
         $name = basename($path);
         $mime = $this->guessMimeByExt($name);
@@ -1635,6 +1805,15 @@ function cacheAndBuildFilesList(string $filesKey, int $empId, ?int $companyId): 
         ];
 
         $lines[] = "{$i}. {$name}";
+
+        Log::info('WPP arquivos: item documento adicionado', [
+            'index' => $i,
+            'name'  => $name,
+            'path'  => $path,
+            'mime'  => $mime,
+            'type'  => 'file',
+        ]);
+
         $i++;
     }
 
@@ -1646,20 +1825,31 @@ function cacheAndBuildFilesList(string $filesKey, int $empId, ?int $companyId): 
             'path'   => null,
             'mime'   => null,
             'type'   => 'photos_bundle',
-            'photos' => $photoFiles, // se quiser usar depois p/ ZIP
+            'photos' => $photoFiles,
         ];
 
         $lines[] = "{$i}. 📷 Fotos do empreendimento";
+
+        Log::info('WPP arquivos: item bundle de fotos adicionado', [
+            'index'       => $i,
+            'name'        => 'Fotos do empreendimento',
+            'type'        => 'photos_bundle',
+            'qtde_photos' => count($photoFiles),
+            'photos'      => $photoFiles,
+        ]);
     }
 
     Cache::put($filesKey, $items, now()->addMinutes(30));
-    Log::info('WPP arquivos: lista montada', [
-        'prefix' => $prefix,
-        'qtde'   => count($items),
+
+    Log::info('WPP arquivos: lista final para cache', [
+        'filesKey' => $filesKey,
+        'qtde'     => count($items),
+        'items'    => $items,
     ]);
 
     return "Arquivos disponíveis:\n\n" . implode("\n", $lines);
 }
+
 
     private function isMultiIndexList(string $msg): bool
     {
@@ -1889,34 +2079,83 @@ PROMPT;
     /**
      * Envia mídia via Make (preferência) e, se não entregar, faz fallback direto na Z-API.
      */
-   private function sendMediaSmart(string $phone, string $pathOrUrl, ?string $caption = null, ?string $mime = null, ?string $disk = null): array
-{
+   private function sendMediaSmart(
+    string $phone,
+    string $pathOrUrl,
+    ?string $caption = null,
+    ?string $mime = null,
+    ?string $disk = null
+): array {
     try {
+        Log::info('sendMediaSmart: start', [
+            'phone'     => $phone,
+            'pathOrUrl' => $pathOrUrl,
+            'caption'   => $caption,
+            'mime_in'   => $mime,
+            'disk'      => $disk,
+        ]);
+
         // 1) Resolve URL pública, mesmo que esteja no disco public
         $publicUrl = $this->resolvePublicUrlForMediaWithFilename($pathOrUrl, $disk);
-        $fileName  = basename(parse_url($pathOrUrl, PHP_URL_PATH) ?: $pathOrUrl);
+
+        // Extrai fileName da URL/caminho
+        $pathPart = parse_url($pathOrUrl, PHP_URL_PATH) ?: $pathOrUrl;
+        $rawFileName = basename($pathPart);
+
+        // Normaliza EXTENSÃO → sempre minúscula (resolve casos .PNG, .JPG, etc.)
+        $ext  = pathinfo($rawFileName, PATHINFO_EXTENSION);
+        $base = pathinfo($rawFileName, PATHINFO_FILENAME);
+
+        if ($ext) {
+            $fileName = $base . '.' . strtolower($ext);
+        } else {
+            // sem extensão explícita
+            $fileName = $rawFileName;
+        }
+
+        Log::info('sendMediaSmart: filename normalizado', [
+            'rawFileName' => $rawFileName,
+            'fileName'    => $fileName,
+        ]);
 
         // MIME
         if (!$mime || $mime === 'application/octet-stream') {
             $mime = $this->guessMimeByExt($fileName);
         }
+
         $caption = $this->normalizeCaptionForWhats($caption);
+
+        Log::info('sendMediaSmart: após resolução de URL e MIME', [
+            'phone'    => $phone,
+            'publicUrl'=> $publicUrl,
+            'fileName' => $fileName,
+            'mime'     => $mime,
+            'caption'  => $caption,
+        ]);
 
         // 2) Tenta Make primeiro (se configurado)
         $hook = env('MAKE_WEBHOOK_URL');
         if ($hook) {
             $payload = [
-                'phone'   => preg_replace('/\D+/', '', $phone),
-                'url'     => $publicUrl,
-                'fileUrl' => $publicUrl,
-                'mime'    => $mime,
-                'fileName'=> $fileName,
-                'caption' => $caption,
+                'phone'    => preg_replace('/\D+/', '', $phone),
+                'url'      => $publicUrl,
+                'fileUrl'  => $publicUrl,
+                'mime'     => $mime,
+                'fileName' => $fileName,
+                'caption'  => $caption,
             ];
 
+            Log::info('sendMediaSmart → Make: enviando payload', [
+                'to'      => $phone,
+                'hook'    => $hook,
+                'payload' => $payload,
+            ]);
+
             $resp = Http::timeout(20)->post($hook, $payload);
-            Log::info('sendMediaSmart → Make', [
-                'to' => $phone, 'status' => $resp->status(), 'body' => $resp->body()
+            Log::info('sendMediaSmart → Make: resposta recebida', [
+                'to'     => $phone,
+                'status' => $resp->status(),
+                'body'   => $resp->body(),
             ]);
 
             if ($resp->successful()) {
@@ -1929,6 +2168,12 @@ PROMPT;
                         || isset($j['id'])
                         || (isset($j['result']) && $j['result'] === 'sent');
                 }
+
+                Log::info('sendMediaSmart → Make: parsed JSON', [
+                    'to' => $phone,
+                    'ok' => $ok,
+                    'j'  => $j,
+                ]);
 
                 if ($ok) {
                     return [
@@ -1944,7 +2189,8 @@ PROMPT;
                 Log::warning('sendMediaSmart: Make 200 mas sem confirmação → fallback Z-API');
             } else {
                 Log::warning('sendMediaSmart: Make falhou → fallback Z-API', [
-                    'status' => $resp->status(), 'body' => $resp->body()
+                    'status' => $resp->status(),
+                    'body'   => $resp->body(),
                 ]);
             }
         } else {
@@ -1952,21 +2198,43 @@ PROMPT;
         }
 
         // 3) Fallback Z-API via URL (send-document/pdf etc)
+        Log::info('sendMediaSmart → Z-API: chamando sendViaZapiMedia', [
+            'phone'    => $phone,
+            'publicUrl'=> $publicUrl,
+            'fileName' => $fileName,
+            'mime'     => $mime,
+            'caption'  => $caption,
+        ]);
+
         $z = $this->sendViaZapiMedia($phone, $publicUrl, $fileName, $mime, $caption);
 
+        Log::info('sendMediaSmart → Z-API: resposta', [
+            'to'   => $phone,
+            'resp' => $z,
+        ]);
+
         if (!empty($z['ok'])) {
-            return $z + ['via' => 'z-api'];
+            return $z + [
+                'via'      => 'z-api',
+                'url'      => $publicUrl,
+                'mime'     => $mime,
+                'fileName' => $fileName,
+            ];
         }
 
         return [
-            'ok'    => false,
-            'error' => $z['error'] ?? 'zapi_media_failed',
-            'via'   => 'z-api',
-            'url'   => $publicUrl,
-            'mime'  => $mime,
+            'ok'      => false,
+            'error'   => $z['error'] ?? 'zapi_media_failed',
+            'via'     => 'z-api',
+            'url'     => $publicUrl,
+            'mime'    => $mime,
+            'fileName'=> $fileName,
         ];
     } catch (\Throwable $e) {
-        Log::error('sendMediaSmart exception', ['e' => $e->getMessage()]);
+        Log::error('sendMediaSmart exception', [
+            'msg'   => $e->getMessage(),
+            'trace' => $e->getTraceAsString(),
+        ]);
         return ['ok' => false, 'error' => $e->getMessage()];
     }
 }
