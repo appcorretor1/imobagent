@@ -9,6 +9,7 @@ use App\Http\Controllers\IncorporadoraController;
 use App\Http\Controllers\Admin\UserController as AdminUserController;
 use App\Http\Controllers\EmpreendimentoUnidadeController;
 use App\Http\Controllers\CompanySettingsController;
+use App\Http\Controllers\EmpreendimentoFotoController;
 
 
 use App\Http\Controllers\{
@@ -213,6 +214,11 @@ Route::middleware(['auth', 'verified', 'tenant'])
 
 /* verifica se usuario existe no banco de dados */
 Route::post('/whatsapp/webhook', [WhatsappWebhookController::class, 'handle']);
+
+
+//fotos separada para ver arquivos
+Route::get('/empreendimentos/{company}/{empreend}/fotos', [EmpreendimentoFotoController::class, 'index'])
+    ->name('empreendimentos.fotos');
 
 /*
 |--------------------------------------------------------------------------

@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\Asset;
 use Barryvdh\DomPDF\Facade\Pdf;
 use Illuminate\Http\Request;
 use Illuminate\Support\Str;
@@ -322,52 +323,90 @@ if ($thread && $thread->selected_empreendimento_id) {
             }
 
             // B) Índices com lista em cache → enviar como documento/mídia
-            if ($this->isMultiIndexList($text) && Cache::has($filesKey)) {
-                $indices = $this->parseIndices($text);
-                if (empty($indices)) {
-                    return $this->sendText($phone, 'Não entendi os números enviados. Tente algo como: 1,2,5' . $this->footerControls());
-                }
+            // B) Índices com lista em cache → enviar como documento/mídia ou link de fotos
+if ($this->isMultiIndexList($text) && Cache::has($filesKey)) {
+    $indices = $this->parseIndices($text);
+    if (empty($indices)) {
+        return $this->sendText(
+            $phone,
+            'Não entendi os números enviados. Tente algo como: 1,2,5' . $this->footerControls()
+        );
+    }
 
-                $items = Cache::get($filesKey, []);
-                $byIdx = collect($items)->keyBy('index');
+    $items = Cache::get($filesKey, []);
+    $byIdx = collect($items)->keyBy('index');
 
-                $picked = [];
-                foreach ($indices as $i) {
-                    if ($byIdx->has($i)) $picked[] = $byIdx->get($i);
-                }
-                if (empty($picked)) {
-                    return $this->sendText($phone, 'Esses índices não existem. Quer listar novamente? Diga: ver arquivos' . $this->footerControls());
-                }
+    $picked = [];
+    foreach ($indices as $i) {
+        if ($byIdx->has($i)) {
+            $picked[] = $byIdx->get($i);
+        }
+    }
 
-                Log::info('WPP arquivos: iniciando envio', ['phone'=>$phone, 'count'=>count($picked)]);
-                $this->sendText($phone, "⏳ Enviando *".count($picked)."* arquivo(s)…");
+    if (empty($picked)) {
+        return $this->sendText(
+            $phone,
+            'Esses índices não batem com a lista atual. Quer listar novamente? Diga: ver arquivos' . $this->footerControls()
+        );
+    }
 
-                $vias = [];
-                $sent = 0;
+    Log::info('WPP arquivos: iniciando envio', ['phone' => $phone, 'count' => count($picked)]);
+    $this->sendText($phone, "⏳ Enviando *" . count($picked) . "* item(s)…");
 
-                foreach ($picked as $pitem) {
-                    Log::info('Z-API envio: preparando', ['file'=>$pitem['name'], 'phone'=>$phone, 's3'=>$pitem['path']]);
-                    $res = $this->sendMediaSmart($phone, $pitem['path'], $pitem['name'], $pitem['mime']); // sempre array
-                    $vias[] = $res['via'] ?? 'n/a';
-                    if (!empty($res['ok'])) $sent++;
-                }
+    $sent           = 0;
+    $vias           = [];
+    $hasFotosBundle = false;
 
-                Log::info('WPP arquivos: envio finalizado', [
-                    'phone'   => $phone,
-                    'total'   => count($picked),
-                    'enviados'=> $sent,
-                    'vias'    => $vias,
-                ]);
+    foreach ($picked as $pitem) {
+        // NOVO: se for o bundle de fotos, manda só o link
+        if (($pitem['type'] ?? 'file') === 'photos_bundle') {
+            $hasFotosBundle = true;
 
-                $this->sendText(
-                    $phone,
-                    "✅ Envio iniciado de *{$sent}* arquivo(s).".
-                    (env('WPP_DEBUG') ? " via: ".implode(', ', array_unique($vias)) : "").
-                    " Se não aparecerem, responda novamente os números." . $this->footerControls()
-                );
+            $urlFotos = route('empreendimentos.fotos', [
+                'company'  => $companyId,
+                'empreend' => $empId,
+            ]);
 
-                return response()->noContent();
-            }
+            $this->sendText(
+                $phone,
+                "Vou te mandar o link com todas as fotos do empreendimento:\n" .
+                "🔗 {$urlFotos}"
+            );
+
+            continue;
+        }
+
+        // arquivos "normais" seguem igual antes
+        Log::info('Z-API envio: preparando', [
+            'file'  => $pitem['name'],
+            'phone' => $phone,
+            's3'    => $pitem['path'],
+        ]);
+
+        $res = $this->sendMediaSmart($phone, $pitem['path'], $pitem['name'], $pitem['mime']); // sempre array
+        $vias[] = $res['via'] ?? 'n/a';
+        if (!empty($res['ok'])) $sent++;
+    }
+
+    if ($sent > 0) {
+        Log::info('WPP arquivos: envio finalizado', [
+            'phone'    => $phone,
+            'total'    => count($picked),
+            'enviados' => $sent,
+            'vias'     => $vias,
+        ]);
+
+        $this->sendText(
+            $phone,
+            "✅ Envio iniciado de *{$sent}* arquivo(s)." .
+            (env('WPP_DEBUG') ? " via: " . implode(', ', array_unique($vias)) : "") .
+            " Se não aparecerem, responda novamente os números." . $this->footerControls()
+        );
+    }
+
+    return response()->noContent();
+}
+
 
             // C) Índices sem lista em cache
             if ($this->isMultiIndexList($text) && !Cache::has($filesKey)) {
@@ -1524,52 +1563,103 @@ PROMPT;
     }
 
     // ===== Helpers de ARQUIVOS (S3) =====
-
-    private function cacheAndBuildFilesList(string $filesKey, int $empId, ?int $companyId): string
-    {
-        if (!$companyId) {
-            Cache::put($filesKey, [], now()->addMinutes(10));
-            Log::warning('WPP arquivos: companyId NULL - não dá para montar prefixo', [
-                'empId' => $empId, 'filesKey' => $filesKey
-            ]);
-            return "Não encontrei arquivos para este empreendimento.";
-        }
-
-        $prefix = "documentos/tenants/{$companyId}/empreendimentos/{$empId}/";
-        Log::info('WPP arquivos: listando S3', ['prefix'=>$prefix, 'empId'=>$empId, 'companyId'=>$companyId]);
-
-        $disk  = Storage::disk('s3');
-        $files = $disk->files($prefix);
-
-        $allowed = ['pdf','doc','docx','xls','xlsx','ppt','pptx','csv','txt','jpg','jpeg','png','gif','webp','mp4','mov','avi','mkv'];
-        $files = array_values(array_filter(
-            $files,
-            fn($p) => in_array(strtolower(pathinfo($p, PATHINFO_EXTENSION)), $allowed, true)
-        ));
-
-        if (empty($files)) {
-            Cache::put($filesKey, [], now()->addMinutes(15));
-            Log::info('WPP arquivos: NENHUM arquivo encontrado no S3', ['prefix'=>$prefix]);
-            return "Não encontrei arquivos para este empreendimento.";
-        }
-
-        usort($files, fn($a,$b) => strcasecmp(basename($a), basename($b)));
-
-        $items = [];
-        $lines = [];
-        $i = 1;
-        foreach ($files as $path) {
-            $name = basename($path);
-            $mime = $this->guessMimeByExt($name);
-            $items[] = ['index'=>$i, 'name'=>$name, 'path'=>$path, 'mime'=>$mime];
-            $lines[] = "{$i}. {$name}";
-            $i++;
-        }
-
-        Cache::put($filesKey, $items, now()->addMinutes(30));
-        Log::info('WPP arquivos: lista montada', ['prefix'=>$prefix, 'qtde'=>count($items)]);
-        return "Arquivos disponíveis:\n\n" . implode("\n", $lines);
+function cacheAndBuildFilesList(string $filesKey, int $empId, ?int $companyId): string
+{
+    if (!$companyId) {
+        Cache::put($filesKey, [], now()->addMinutes(10));
+        Log::warning('WPP arquivos: companyId NULL - não dá para montar prefixo', [
+            'empId' => $empId, 'filesKey' => $filesKey
+        ]);
+        return "Não encontrei arquivos para este empreendimento.";
     }
+
+    $prefix = "documentos/tenants/{$companyId}/empreendimentos/{$empId}/";
+    Log::info('WPP arquivos: listando S3', ['prefix' => $prefix, 'empId' => $empId, 'companyId' => $companyId]);
+
+    $disk  = Storage::disk('s3');
+    $files = $disk->files($prefix);
+
+    // separa extensões
+    $allowedDocs   = ['pdf','doc','docx','xls','xlsx','ppt','pptx','csv','txt'];
+    $allowedImages = ['jpg','jpeg','png','gif','webp'];
+    $allowedVideos = ['mp4','mov','avi','mkv'];
+
+    $allowed = array_merge($allowedDocs, $allowedImages, $allowedVideos);
+
+    // filtra só extensões permitidas
+    $files = array_values(array_filter(
+        $files,
+        fn ($p) => in_array(
+            strtolower(pathinfo($p, PATHINFO_EXTENSION)),
+            $allowed,
+            true
+        )
+    ));
+
+    if (empty($files)) {
+        Cache::put($filesKey, [], now()->addMinutes(15));
+        Log::info('WPP arquivos: NENHUM arquivo encontrado no S3', ['prefix' => $prefix]);
+        return "Não encontrei arquivos para este empreendimento.";
+    }
+
+    // separa documentos x fotos
+    $docFiles   = [];
+    $photoFiles = [];
+
+    foreach ($files as $path) {
+        $ext = strtolower(pathinfo($path, PATHINFO_EXTENSION));
+        if (in_array($ext, $allowedImages, true)) {
+            $photoFiles[] = $path;
+        } else {
+            $docFiles[] = $path;
+        }
+    }
+
+    usort($docFiles, fn($a, $b) => strcasecmp(basename($a), basename($b)));
+
+    $items = [];
+    $lines = [];
+    $i     = 1;
+
+    // 1) Documentos normais (PDF, XLS etc.)
+    foreach ($docFiles as $path) {
+        $name = basename($path);
+        $mime = $this->guessMimeByExt($name);
+
+        $items[] = [
+            'index' => $i,
+            'name'  => $name,
+            'path'  => $path,
+            'mime'  => $mime,
+            'type'  => 'file',
+        ];
+
+        $lines[] = "{$i}. {$name}";
+        $i++;
+    }
+
+    // 2) Se tiver fotos, adiciona UMA opção de bundle
+    if (!empty($photoFiles)) {
+        $items[] = [
+            'index'  => $i,
+            'name'   => 'Fotos do empreendimento',
+            'path'   => null,
+            'mime'   => null,
+            'type'   => 'photos_bundle',
+            'photos' => $photoFiles, // se quiser usar depois p/ ZIP
+        ];
+
+        $lines[] = "{$i}. 📷 Fotos do empreendimento";
+    }
+
+    Cache::put($filesKey, $items, now()->addMinutes(30));
+    Log::info('WPP arquivos: lista montada', [
+        'prefix' => $prefix,
+        'qtde'   => count($items),
+    ]);
+
+    return "Arquivos disponíveis:\n\n" . implode("\n", $lines);
+}
 
     private function isMultiIndexList(string $msg): bool
     {
@@ -3669,6 +3759,136 @@ Financiamento: R$ 481.385,75
         'corretorTelefone'   => $corretor->phone,
     ]);
 }
+
+
+//enviar fotos em grupo
+protected function sendEmpreendimentoAssetsMenu($thread, int $empId, int $tenantId, string $empreendimentoNome, string $phone)
+{
+    // 2.1 Buscar arquivos “documentos” (sem fotos)
+    $arquivos = Asset::where('empreend_id', $empId)
+        ->where('tenant_id', $tenantId)
+        ->where(function ($q) {
+            // Tudo que NÃO for imagem entra como “arquivo normal”
+            $q->whereNull('mime')
+              ->orWhere('mime', 'not like', 'image/%');
+        })
+        ->orderBy('original_name')
+        ->get();
+
+    // 2.2 Ver se existem fotos do empreendimento
+    $hasFotos = Asset::where('empreend_id', $empId)
+        ->where('tenant_id', $tenantId)
+        ->where('mime', 'like', 'image/%')
+        ->exists();
+
+    // 2.3 Montar a lista pro WhatsApp
+    $linhas = [];
+    $mapIndexToAssetId = [];
+    $idx = 1;
+
+    // 1) Arquivos “normais”
+    foreach ($arquivos as $asset) {
+        $nome = $asset->original_name ?: basename($asset->path);
+
+        $linhas[] = "{$idx}. {$nome}";
+        $mapIndexToAssetId[$idx] = $asset->id;
+        $idx++;
+    }
+
+    // 2) Se tiver fotos, adiciona UMA opção única
+    $indexFotos = null;
+    if ($hasFotos) {
+        $linhas[] = "{$idx}. 📷 Fotos do empreendimento";
+        $indexFotos = $idx;
+    }
+
+    if (empty($linhas)) {
+        $this->sendWhatsAppText($phone, "Ainda não encontrei arquivos cadastrados para esse empreendimento.");
+        return;
+    }
+
+    $mensagem  = "Encontrei esses arquivos para o empreendimento {$empreendimentoNome}:\n\n";
+    $mensagem .= implode("\n", $linhas);
+    $mensagem .= "\n\nResponda com o número do item que você quer abrir.";
+
+    // Aqui você guarda o mapeamento no thread (ajuste para o campo que você usa)
+    // Estou assumindo uma coluna JSON chamada 'meta'. Se o nome for outro, ajusta aqui.
+    $meta = $thread->meta ?? [];
+    $meta['map_index_to_asset_id'] = $mapIndexToAssetId;
+    $meta['index_fotos']           = $indexFotos;
+    $meta['empreend_id']           = $empId;
+    $meta['tenant_id']             = $tenantId;
+
+    $thread->meta  = $meta;
+    $thread->state = 'awaiting_asset_choice'; // importante pra próxima etapa
+    $thread->save();
+
+    $this->sendWhatsAppText($phone, $mensagem);
+}
+
+protected function handleEmpreendimentoAssetChoice($thread, string $text, string $phone)
+{
+    $numeroDigitado = (int) trim($text); // ex: "1", "2", "3"
+
+    $meta = $thread->meta ?? [];
+
+    $map      = $meta['map_index_to_asset_id'] ?? [];
+    $indexFotos = $meta['index_fotos'] ?? null;
+    $empId    = $meta['empreend_id'] ?? null;
+    $tenantId = $meta['tenant_id'] ?? null;
+
+    if (!$empId || !$tenantId) {
+        $this->sendWhatsAppText($phone, "Não consegui localizar os arquivos desse empreendimento, pode tentar de novo digitando *ver arquivos*?");
+        $thread->state = 'idle';
+        $thread->save();
+        return;
+    }
+
+    // 1) Se o número escolhido é a opção de FOTOS:
+    if ($indexFotos && $numeroDigitado === (int) $indexFotos) {
+        $urlFotos = route('empreendimentos.fotos', [
+            'empreend' => $empId,
+            'tenant'   => $tenantId,
+        ]);
+
+        $msg = "Vou te mandar o link com todas as fotos do empreendimento:\n"
+             . "🔗 {$urlFotos}";
+
+        $this->sendWhatsAppText($phone, $msg);
+
+        // volta pra idle ou outro estado que você use
+        $thread->state = 'idle';
+        $thread->save();
+        return;
+    }
+
+    // 2) Caso contrário, é algum arquivo normal
+    if (!empty($map[$numeroDigitado])) {
+        $assetId = $map[$numeroDigitado];
+
+        $asset = Asset::where('id', $assetId)
+            ->where('tenant_id', $tenantId)
+            ->first();
+
+        if (!$asset) {
+            $this->sendWhatsAppText($phone, "Não encontrei esse arquivo, pode tentar de novo?");
+            return;
+        }
+
+        $url = Storage::disk('s3')->url($asset->path);
+
+        $msg = "Segue o arquivo:\n{$url}";
+        $this->sendWhatsAppText($phone, $msg);
+
+        $thread->state = 'idle';
+        $thread->save();
+        return;
+    }
+
+    // Se cair aqui, número inválido
+    $this->sendWhatsAppText($phone, "Opção inválida. Me manda o número do arquivo que você quer abrir.");
+}
+
 
 
 }
