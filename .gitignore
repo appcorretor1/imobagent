@@ -10,10 +10,10 @@
 /.nova
 /.phpunit.cache
 /.vscode
+/public/hot
 /.zed
 /auth.json
 /node_modules
-/public/hot
 /public/storage
 /storage/*.key
 /storage/pail
@@ -21,3 +21,6 @@
 Homestead.json
 Homestead.yaml
 Thumbs.db
+
+!public/build
+!public/build/**
