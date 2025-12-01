@@ -22,6 +22,11 @@ return [
         'key' => env('RESEND_API_KEY'),
     ],
 
+    'make' => [
+        'webhook_novo_empreendimento' => env('MAKE_WEBHOOK_NOVO_EMPREENDIMENTO'),
+    ],
+    
+
     'ses' => [
         'key' => env('AWS_ACCESS_KEY_ID'),
         'secret' => env('AWS_SECRET_ACCESS_KEY'),

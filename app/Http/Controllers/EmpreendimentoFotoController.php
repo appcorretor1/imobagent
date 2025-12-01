@@ -30,7 +30,7 @@ class EmpreendimentoFotoController extends Controller
         );
 
         // Busca nome do empreendimento (ajusta o model/campos se for diferente)
-        $empreendimento = Empreendimento::find($empreend);
+        $empreendimento = Empreendimento::with('incorporadora')->find($empreend);
 
         // Se você já tiver rota/arquivo ZIP pode montar aqui, senão deixa null
         $zipUrl = null;
@@ -40,12 +40,13 @@ class EmpreendimentoFotoController extends Controller
         //     $zipUrl = $disk->url($zipPath);
         // }
 
-        return view('empreendimentos.fotos', [
-            'urls'          => $urls,
-            'company'       => $company,
-            'empreend'      => $empreend,
-            'empreendimento'=> $empreendimento,
-            'zipUrl'        => $zipUrl,
-        ]);
+      return view('empreendimentos.fotos', [
+    'urls'          => $urls,
+    'company'       => $company,
+    'empreend'      => $empreend,
+    'empreendimento'=> $empreendimento,
+    'zipUrl'        => $zipUrl,
+]);
+
     }
 }

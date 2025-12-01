@@ -1,5 +1,24 @@
 @php
     $role = auth()->user()->role ?? null;
+
+    // Pega a empresa logada (ajuste se o relacionamento tiver outro nome)
+    $company = auth()->user()->company ?? null;
+
+    // Monta a URL da logo
+    $logoUrl = null;
+
+    if ($company && $company->logo_path) {
+        // Se o campo já vier com URL completa (https://...)
+        if (Str::startsWith($company->logo_path, ['http://', 'https://'])) {
+            $logoUrl = $company->logo_path;
+        } else {
+            // Se for só o path do arquivo no S3
+            $logoUrl = Storage::disk('s3')->url($company->logo_path);
+        }
+    } else {
+        // Fallback: logo padrão da aplicação
+        $logoUrl = asset('images/logo-default.png');
+    }
 @endphp
 
 <nav x-data="{ open: false }" class="bg-white border-b border-gray-100">
@@ -9,8 +28,12 @@
             <div class="flex">
                 <!-- Logo -->
                 <div class="shrink-0 flex items-center">
-                    <a href="{{ route('admin.dashboard') }}">
-                       LOGO CLIENTE
+                    <a href="{{ route('admin.dashboard') }}" class="flex items-center gap-2">
+                        <img
+                            src="{{ $logoUrl }}"
+                            alt="Logo da empresa"
+                            class="h-8 w-auto object-contain"
+                        >
                     </a>
                 </div>
 
@@ -49,29 +72,29 @@
                     </x-slot>
 
                     <x-slot name="content">
-    @if(auth()->check() && auth()->user()->role === 'diretor')
-        <x-dropdown-link :href="route('admin.users.index')">
-            Gestão de usuários
-        </x-dropdown-link>
+                        @if(auth()->check() && auth()->user()->role === 'diretor')
+                            <x-dropdown-link :href="route('admin.users.index')">
+                                Gestão de usuários
+                            </x-dropdown-link>
 
-        <x-dropdown-link :href="route('admin.company.edit')">
-            Dados da empresa
-        </x-dropdown-link>
-    @endif
+                            <x-dropdown-link :href="route('admin.company.edit')">
+                                Dados da empresa
+                            </x-dropdown-link>
+                        @endif
 
-    <x-dropdown-link :href="route('profile.edit')">
-        {{ __('Profile') }}
-    </x-dropdown-link>
+                        <x-dropdown-link :href="route('profile.edit')">
+                            {{ __('Profile') }}
+                        </x-dropdown-link>
 
-    <form method="POST" action="{{ route('logout') }}">
-        @csrf
-        <x-dropdown-link
-            href="{{ route('logout') }}"
-            onclick="event.preventDefault(); this.closest('form').submit();">
-            {{ __('Log Out') }}
-        </x-dropdown-link>
-    </form>
-</x-slot>
+                        <form method="POST" action="{{ route('logout') }}">
+                            @csrf
+                            <x-dropdown-link
+                                href="{{ route('logout') }}"
+                                onclick="event.preventDefault(); this.closest('form').submit();">
+                                {{ __('Log Out') }}
+                            </x-dropdown-link>
+                        </form>
+                    </x-slot>
 
                 </x-dropdown>
             </div>
@@ -112,7 +135,7 @@
                 </x-responsive-nav-link>
             @endif
 
-             @if(in_array($role, ['super_admin','diretor','gerente']))
+            @if(in_array($role, ['super_admin','diretor','gerente']))
                 <x-responsive-nav-link :href="route('admin.users.index')" :active="request()->routeIs('admin.users.*')">
                     Gestão de usuários
                 </x-responsive-nav-link>

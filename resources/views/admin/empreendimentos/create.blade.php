@@ -23,7 +23,9 @@
         @endif
 
         <div class="bg-white shadow rounded-lg p-6">
-            <form action="{{ route('admin.empreendimentos.store') }}" method="POST">
+            <form action="{{ route('admin.empreendimentos.store') }}"
+                  method="POST"
+                  enctype="multipart/form-data">
                 @csrf
 
                 {{-- Ativo --}}
@@ -39,6 +41,59 @@
                     <label for="ativo" class="text-sm font-medium text-gray-700">
                         Empreendimento ativo
                     </label>
+                </div>
+
+                {{-- IMAGENS: BANNER & LOGOS --}}
+                <div class="mb-6 rounded-lg border border-dashed border-slate-300 bg-slate-50/80 p-4">
+                    <div class="flex items-start justify-between gap-4 mb-3">
+                        <div>
+                            <h3 class="text-sm font-semibold text-slate-800">
+                                Imagem de capa & logos
+                            </h3>
+                            <p class="text-xs text-slate-500">
+                                Essas imagens serão usadas na vitrine do empreendimento, na galeria pública
+                                e nas comunicações com corretores.
+                            </p>
+                        </div>
+                    </div>
+
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        {{-- BANNER --}}
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700">
+                                Banner do empreendimento
+                            </label>
+                            <input type="file"
+                                   name="banner_thumb"
+                                   accept="image/*"
+                                   class="mt-2 block w-full text-sm text-gray-700
+                                          file:mr-4 file:py-2 file:px-3
+                                          file:rounded-md file:border-0
+                                          file:bg-indigo-50 file:text-indigo-700
+                                          hover:file:bg-indigo-100 bg-white border border-slate-200 rounded-md">
+                            <p class="mt-1 text-[11px] text-slate-500">
+                                Sugestão: proporção 16:9, mínimo 1600×900 px. Formato JPG ou PNG até 2MB.
+                            </p>
+                        </div>
+
+                        {{-- LOGO EMPREENDIMENTO --}}
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700">
+                                Logo do empreendimento
+                            </label>
+                            <input type="file"
+                                   name="logo_path"
+                                   accept="image/*"
+                                   class="mt-2 block w-full text-sm text-gray-700
+                                          file:mr-4 file:py-2 file:px-3
+                                          file:rounded-md file:border-0
+                                          file:bg-indigo-50 file:text-indigo-700
+                                          hover:file:bg-indigo-100 bg-white border border-slate-200 rounded-md">
+                            <p class="mt-1 text-[11px] text-slate-500">
+                                Preferencialmente PNG com fundo transparente, até 1MB.
+                            </p>
+                        </div>
+                    </div>
                 </div>
 
                 {{-- Dados principais --}}
@@ -134,7 +189,7 @@
                 </div>
 
                 <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
-                    {{-- UF / CIDADE via IBGE (sem $e no create) --}}
+                    {{-- UF / CIDADE via IBGE --}}
                     <div x-data="localidadeIBGE('{{ old('uf') }}', '{{ old('cidade') }}')" class="grid grid-cols-1 sm:grid-cols-2 gap-3">
 
                         {{-- ESTADO --}}
@@ -192,18 +247,18 @@
                     >{{ old('descricao') }}</textarea>
                 </div>
 
-                {{-- Unidades do empreendimento (importação via planilha) --}}
-<div class="mt-6 rounded border border-dashed border-slate-300 bg-slate-50 p-4">
-    <h3 class="font-semibold mb-2 text-sm">Unidades do empreendimento</h3>
-    <p class="text-xs text-slate-600 mb-2">
-        As unidades serão cadastradas em uma tela específica, a partir de uma planilha Excel.
-        Primeiro salve o empreendimento. Depois, na listagem, clique no botão 
-        <span class="font-semibold">“Unidades”</span> para importar a planilha.
-    </p>
+                {{-- Unidades do empreendimento (informação) --}}
+                <div class="mt-6 rounded border border-dashed border-slate-300 bg-slate-50 p-4">
+                    <h3 class="font-semibold mb-2 text-sm">Unidades do empreendimento</h3>
+                    <p class="text-xs text-slate-600 mb-2">
+                        As unidades serão cadastradas em uma tela específica, a partir de uma planilha Excel.
+                        Primeiro salve o empreendimento. Depois, na listagem, clique no botão
+                        <span class="font-semibold">“Unidades”</span> para importar a planilha.
+                    </p>
 
-    <div class="text-xs text-slate-600">
-        <p class="font-semibold mb-1">Modelo ideal de planilha (.xlsx):</p>
-        <div class="inline-block rounded bg-white border border-slate-200 px-3 py-2">
+                    <div class="text-xs text-slate-600">
+                        <p class="font-semibold mb-1">Modelo ideal de planilha (.xlsx):</p>
+                        <div class="inline-block rounded bg-white border border-slate-200 px-3 py-2">
             <pre class="text-[11px] leading-4">
 grupo_unidade   unidade     status
 Torre 1         101         livre
@@ -213,15 +268,14 @@ Quadra A        Casa 08     livre
 Alameda Azul    Casa 01     fechado
 —               201         livre
             </pre>
-        </div>
-        <p class="mt-2 text-[11px] text-slate-500">
-            • <code>grupo_unidade</code> pode ser Torre, Quadra, Alameda, Bloco, etc.  
-            • Se não existir agrupamento, deixe como <code>—</code> ou em branco.  
-            • <code>status</code> deve ser algo como: <strong>livre</strong>, <strong>reservado</strong>, <strong>fechado</strong>, etc.
-        </p>
-    </div>
-</div>
-
+                        </div>
+                        <p class="mt-2 text-[11px] text-slate-500">
+                            • <code>grupo_unidade</code> pode ser Torre, Quadra, Alameda, Bloco, etc.  
+                            • Se não existir agrupamento, deixe como <code>—</code> ou em branco.  
+                            • <code>status</code> deve ser algo como: <strong>livre</strong>, <strong>reservado</strong>, <strong>fechado</strong>, etc.
+                        </p>
+                    </div>
+                </div>
 
                 {{-- Campos IA / JSON (avançado) --}}
                 <details class="mb-6 mt-6">
@@ -312,56 +366,54 @@ Alameda Azul    Casa 01     fechado
         </div>
     </div>
 
-<!--- lista uf / cidade ----->
-<script>
-    document.addEventListener('alpine:init', () => {
-        Alpine.data('localidadeIBGE', (ufInicial = '', cidadeInicial = '') => ({
-            estados: [],
-            cidades: [],
-            uf: ufInicial,
-            cidade: cidadeInicial,
+    <!--- lista uf / cidade ----->
+    <script>
+        document.addEventListener('alpine:init', () => {
+            Alpine.data('localidadeIBGE', (ufInicial = '', cidadeInicial = '') => ({
+                estados: [],
+                cidades: [],
+                uf: ufInicial,
+                cidade: cidadeInicial,
 
-            async loadEstados() {
-                if (this.estados.length) return; // evita recarregar
-                try {
-                    const res = await fetch('https://servicodados.ibge.gov.br/api/v1/localidades/estados?orderBy=nome');
-                    this.estados = await res.json();
-                } catch (e) {
-                    console.error('Erro ao carregar estados IBGE', e);
-                }
-            },
-
-            async loadCidades() {
-                this.cidades = [];
-                this.cidade = '';
-
-                if (!this.uf) return;
-
-                try {
-                    const res = await fetch(
-                        `https://servicodados.ibge.gov.br/api/v1/localidades/estados/${this.uf}/municipios?orderBy=nome`
-                    );
-                    this.cidades = await res.json();
-
-                    // Se já houver cidade no old(), seleciona
-                    if (cidadeInicial) {
-                        this.cidade = cidadeInicial;
+                async loadEstados() {
+                    if (this.estados.length) return;
+                    try {
+                        const res = await fetch('https://servicodados.ibge.gov.br/api/v1/localidades/estados?orderBy=nome');
+                        this.estados = await res.json();
+                    } catch (e) {
+                        console.error('Erro ao carregar estados IBGE', e);
                     }
-                } catch (e) {
-                    console.error('Erro ao carregar cidades IBGE', e);
-                }
-            },
+                },
 
-            // Carrega tudo automaticamente se vier valores do formulário (old)
-            init() {
-                if (ufInicial) {
-                    this.loadEstados().then(() => {
-                        this.loadCidades();
-                    });
+                async loadCidades() {
+                    this.cidades = [];
+                    this.cidade = '';
+
+                    if (!this.uf) return;
+
+                    try {
+                        const res = await fetch(
+                            `https://servicodados.ibge.gov.br/api/v1/localidades/estados/${this.uf}/municipios?orderBy=nome`
+                        );
+                        this.cidades = await res.json();
+
+                        if (cidadeInicial) {
+                            this.cidade = cidadeInicial;
+                        }
+                    } catch (e) {
+                        console.error('Erro ao carregar cidades IBGE', e);
+                    }
+                },
+
+                init() {
+                    if (ufInicial) {
+                        this.loadEstados().then(() => {
+                            this.loadCidades();
+                        });
+                    }
                 }
-            }
-        }));
-    });
-</script>
+            }));
+        });
+    </script>
 
 </x-app-layout>

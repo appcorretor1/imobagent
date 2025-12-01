@@ -97,8 +97,18 @@ Route::middleware(['auth', 'verified', 'tenant'])
             ->parameters(['empreendimentos' => 'e'])
             ->whereNumber('e');
 
+           // 🔹 INCORPORADORAS (sem prefix extra, sem "admin." duplicado)
+        Route::get('incorporadoras', [IncorporadoraController::class, 'index'])
+            ->name('incorporadoras.index');
+
         Route::post('incorporadoras', [IncorporadoraController::class, 'store'])
             ->name('incorporadoras.store');
+
+        Route::get('incorporadoras/{id}/edit', [IncorporadoraController::class, 'edit'])
+            ->name('incorporadoras.edit');
+
+        Route::post('incorporadoras/{id}', [IncorporadoraController::class, 'update'])
+            ->name('incorporadoras.update');
 
         /*
         |--------------------------------------------------------------------------

@@ -1,13 +1,25 @@
+@php
+    use Illuminate\Support\Facades\Storage;
+@endphp
+
 <x-app-layout>
     <x-slot name="header">
         <div class="flex items-center justify-between">
             <h2 class="font-semibold text-xl">
                 Empreendimentos
             </h2>
-            <a href="{{ route('admin.empreendimentos.create') }}"
-               class="text-sm px-3 py-1.5 rounded bg-indigo-600 text-white hover:bg-indigo-700">
-                + Novo empreendimento
-            </a>
+
+            <div class="mb-6 flex justify-end gap-2">
+                <a href="{{ route('admin.incorporadoras.index') }}"
+                   class="px-4 py-2 rounded border border-slate-300 text-slate-600 text-sm hover:bg-slate-100">
+                    Incorporadoras
+                </a>
+
+                <a href="{{ route('admin.empreendimentos.create') }}"
+                   class="px-4 py-2 rounded bg-indigo-600 text-white text-sm hover:bg-indigo-700">
+                    + Novo empreendimento
+                </a>
+            </div>
         </div>
     </x-slot>
 
@@ -48,12 +60,6 @@
                         class="px-4 py-2 rounded bg-gray-800 text-white text-sm hover:bg-gray-900">
                     Filtrar
                 </button>
-
-                <button type="button"
-                        @click="showIncorporadoraModal = true"
-                        class="px-4 py-2 rounded border border-indigo-500 text-indigo-600 text-sm hover:bg-indigo-50">
-                    + Nova incorporadora
-                </button>
             </div>
         </form>
 
@@ -65,86 +71,141 @@
         @else
             <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                 @foreach($empreendimentos as $emp)
-                    <div class="bg-white rounded shadow p-4 flex flex-col justify-between">
-                        <div class="space-y-1">
-                            <div class="flex items-start justify-between gap-2">
-                                <h3 class="text-sm font-semibold text-gray-900">
-                                    {{ $emp->nome }}
-                                </h3>
+                    @php
+                        $bannerUrl   = $emp->banner_thumb
+                            ? Storage::disk('s3')->url($emp->banner_thumb)
+                            : null;
+
+                        $logoEmpUrl  = $emp->logo_path
+                            ? Storage::disk('s3')->url($emp->logo_path)
+                            : null;
+
+                        $logoIncUrl  = $emp->incorporadora?->logo_path
+                            ? Storage::disk('s3')->url($emp->incorporadora->logo_path)
+                            : null;
+                    @endphp
+
+                    <div class="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden flex flex-col">
+                        {{-- BANNER / THUMB --}}
+                        <div class="relative h-32 bg-slate-100">
+                            @if($bannerUrl)
+                                <img src="{{ $bannerUrl }}"
+                                     alt="Banner {{ $emp->nome }}"
+                                     class="w-full h-full object-cover">
+                            @else
+                                <div class="w-full h-full flex items-center justify-center text-[11px] text-slate-400">
+                                    Sem banner cadastrado
+                                </div>
+                            @endif
+
+                            {{-- LOGOS SOBREPOSTOS --}}
+                            <div class="absolute top-2 left-2 flex gap-2">
+                                @if($logoEmpUrl)
+                                    <div class="h-9 w-9 rounded-lg bg-white/90 border border-slate-200 shadow-sm flex items-center justify-center overflow-hidden">
+                                        <img src="{{ $logoEmpUrl }}"
+                                             alt="Logo {{ $emp->nome }}"
+                                             class="max-h-8 max-w-[32px] object-contain">
+                                    </div>
+                                @endif
+
+                                @if($logoIncUrl)
+                                    <div class="h-9 w-9 rounded-lg bg-white/90 border border-slate-200 shadow-sm flex items-center justify-center overflow-hidden">
+                                        <img src="{{ $logoIncUrl }}"
+                                             alt="Logo {{ $emp->incorporadora?->nome }}"
+                                             class="max-h-8 max-w-[32px] object-contain">
+                                    </div>
+                                @endif
+                            </div>
+
+                            {{-- BADGE ATIVO / INATIVO --}}
+                            <div class="absolute bottom-2 right-2">
                                 @if($emp->ativo)
-                                    <span class="inline-flex items-center rounded-full bg-green-100 px-2 py-0.5 text-[11px] font-medium text-green-700">
+                                    <span class="inline-flex items-center rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-medium text-emerald-700">
                                         Ativo
                                     </span>
                                 @else
-                                    <span class="inline-flex items-center rounded-full bg-gray-100 px-2 py-0.5 text-[11px] font-medium text-gray-600">
+                                    <span class="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-600">
                                         Inativo
                                     </span>
                                 @endif
                             </div>
-
-                            <p class="text-xs text-gray-600">
-                                @if($emp->cidade || $emp->uf)
-                                    {{ $emp->cidade }}@if($emp->uf)/{{ $emp->uf }}@endif
-                                @else
-                                    <span class="italic text-gray-400">Cidade/UF não informado</span>
-                                @endif
-                            </p>
-
-                            <p class="text-xs text-gray-600">
-                                <span class="font-medium">Incorporadora:</span>
-                                {{ $emp->incorporadora?->nome ?? '—' }}
-                            </p>
-
-                            @if($emp->tipologia)
-                                <p class="text-xs text-gray-600">
-                                    <span class="font-medium">Tipologia:</span> {{ $emp->tipologia }}
-                                </p>
-                            @endif
-
-                            @if($emp->preco_base)
-                                <p class="text-xs text-gray-600">
-                                    <span class="font-medium">Preço base:</span>
-                                    R$ {{ number_format($emp->preco_base, 2, ',', '.') }}
-                                </p>
-                            @endif
                         </div>
 
-                        <div class="mt-4 flex flex-wrap gap-2">
-                            {{-- TEXTO IA --}}
-                            <a href="{{ route('admin.empreendimentos.texto.edit', $emp->id) }}"
-                               class="flex-1 min-w-[120px] inline-flex items-center justify-center px-3 py-1.5 rounded text-xs font-medium border border-indigo-500 text-indigo-600 hover:bg-indigo-50">
-                                Texto IA
-                            </a>
+                        {{-- CONTEÚDO --}}
+                        <div class="p-4 flex-1 flex flex-col justify-between">
+                            <div class="space-y-1">
+                                <h3 class="text-sm font-semibold text-gray-900 line-clamp-2">
+                                    {{ $emp->nome }}
+                                </h3>
 
-                            {{-- ARQUIVOS --}}
-                            <a href="{{ route('admin.assets.index', $emp->id) }}"
-                               class="flex-1 min-w-[120px] inline-flex items-center justify-center px-3 py-1.5 rounded text-xs font-medium border border-slate-300 text-slate-700 hover:bg-slate-50">
-                                Arquivos
-                            </a>
-                             {{-- UNIDADES --}}
-    <a href="{{ route('admin.empreendimentos.unidades.index', $emp->id) }}"
-       class="flex-1 min-w-[120px] inline-flex items-center justify-center px-3 py-1.5 rounded text-xs font-medium border border-emerald-500 text-emerald-700 hover:bg-emerald-50">
-        Unidades
-    </a>
+                                <p class="text-xs text-gray-600">
+                                    @if($emp->cidade || $emp->uf)
+                                        {{ $emp->cidade }}@if($emp->uf)/{{ $emp->uf }}@endif
+                                    @else
+                                        <span class="italic text-gray-400">Cidade/UF não informado</span>
+                                    @endif
+                                </p>
 
-                            {{-- EDITAR --}}
-                            <a href="{{ route('admin.empreendimentos.edit', $emp->id) }}"
-                               class="flex-1 min-w-[120px] inline-flex items-center justify-center px-3 py-1.5 rounded text-xs font-medium border border-amber-400 text-amber-700 hover:bg-amber-50">
-                                Editar
-                            </a>
+                                <p class="text-xs text-gray-600 flex items-center gap-1">
+                                    <span class="font-medium">Incorporadora:</span>
+                                    <span class="truncate">
+                                        {{ $emp->incorporadora?->nome ?? '—' }}
+                                    </span>
+                                </p>
 
-                            {{-- EXCLUIR --}}
-                            <form action="{{ route('admin.empreendimentos.destroy', $emp->id) }}"
-                                  method="POST"
-                                  class="flex-1 min-w-[120px]"
-                                  onsubmit="return confirm('Tem certeza que deseja excluir este empreendimento?');">
-                                @csrf
-                                @method('DELETE')
-                                <button type="submit"
-                                        class="w-full inline-flex items-center justify-center px-3 py-1.5 rounded text-xs font-medium border border-red-400 text-red-600 hover:bg-red-50">
-                                    Excluir
-                                </button>
-                            </form>
+                                @if($emp->tipologia)
+                                    <p class="text-xs text-gray-600">
+                                        <span class="font-medium">Tipologia:</span> {{ $emp->tipologia }}
+                                    </p>
+                                @endif
+
+                                @if($emp->preco_base)
+                                    <p class="text-xs text-gray-600">
+                                        <span class="font-medium">Preço base:</span>
+                                        R$ {{ number_format($emp->preco_base, 2, ',', '.') }}
+                                    </p>
+                                @endif
+                            </div>
+
+                            {{-- AÇÕES --}}
+                            <div class="mt-4 flex flex-wrap gap-2">
+                                {{-- TEXTO IA --}}
+                                <a href="{{ route('admin.empreendimentos.texto.edit', $emp->id) }}"
+                                   class="flex-1 min-w-[120px] inline-flex items-center justify-center px-3 py-1.5 rounded text-xs font-medium border border-indigo-500 text-indigo-600 hover:bg-indigo-50">
+                                    Texto IA
+                                </a>
+
+                                {{-- ARQUIVOS --}}
+                                <a href="{{ route('admin.assets.index', $emp->id) }}"
+                                   class="flex-1 min-w-[120px] inline-flex items-center justify-center px-3 py-1.5 rounded text-xs font-medium border border-slate-300 text-slate-700 hover:bg-slate-50">
+                                    Arquivos
+                                </a>
+
+                                {{-- UNIDADES --}}
+                                <a href="{{ route('admin.empreendimentos.unidades.index', $emp->id) }}"
+                                   class="flex-1 min-w-[120px] inline-flex items-center justify-center px-3 py-1.5 rounded text-xs font-medium border border-emerald-500 text-emerald-700 hover:bg-emerald-50">
+                                    Unidades
+                                </a>
+
+                                {{-- EDITAR --}}
+                                <a href="{{ route('admin.empreendimentos.edit', $emp->id) }}"
+                                   class="flex-1 min-w-[120px] inline-flex items-center justify-center px-3 py-1.5 rounded text-xs font-medium border border-amber-400 text-amber-700 hover:bg-amber-50">
+                                    Editar
+                                </a>
+
+                                {{-- EXCLUIR --}}
+                                <form action="{{ route('admin.empreendimentos.destroy', $emp->id) }}"
+                                      method="POST"
+                                      class="flex-1 min-w-[120px]"
+                                      onsubmit="return confirm('Tem certeza que deseja excluir este empreendimento?');">
+                                    @csrf
+                                    @method('DELETE')
+                                    <button type="submit"
+                                            class="w-full inline-flex items-center justify-center px-3 py-1.5 rounded text-xs font-medium border border-red-400 text-red-600 hover:bg-red-50">
+                                        Excluir
+                                    </button>
+                                </form>
+                            </div>
                         </div>
                     </div>
                 @endforeach
@@ -155,7 +216,7 @@
             </div>
         @endif
 
-        {{-- MODAL: NOVA INCORPORADORA --}}
+        {{-- MODAL: NOVA INCORPORADORA (mantido igual) --}}
         <div x-show="showIncorporadoraModal"
              x-cloak
              class="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
@@ -180,35 +241,34 @@
                                class="mt-1 w-full rounded border-gray-300 text-sm">
                     </div>
 
-                  <div x-data="incorporadoraLocalidade()" class="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-3">
-    <div>
-        <label class="block text-sm font-medium">Estado</label>
-        <select name="uf"
-                x-model="uf"
-                @focus="estados.length === 0 && loadEstados()"
-                @change="loadCidades()"
-                class="mt-1 w-full rounded border-gray-300 text-sm">
-            <option value="">Selecione...</option>
-            <template x-for="estado in estados" :key="estado.id">
-                <option :value="estado.sigla" x-text="estado.sigla + ' - ' + estado.nome"></option>
-            </template>
-        </select>
-    </div>
+                    <div x-data="incorporadoraLocalidade()" class="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-3">
+                        <div>
+                            <label class="block text-sm font-medium">Estado</label>
+                            <select name="uf"
+                                    x-model="uf"
+                                    @focus="estados.length === 0 && loadEstados()"
+                                    @change="loadCidades()"
+                                    class="mt-1 w-full rounded border-gray-300 text-sm">
+                                <option value="">Selecione...</option>
+                                <template x-for="estado in estados" :key="estado.id">
+                                    <option :value="estado.sigla" x-text="estado.sigla + ' - ' + estado.nome"></option>
+                                </template>
+                            </select>
+                        </div>
 
-    <div>
-        <label class="block text-sm font-medium">Cidade</label>
-        <select name="cidade"
-                x-model="cidade"
-                :disabled="!uf || !cidades.length"
-                class="mt-1 w-full rounded border-gray-300 text-sm">
-            <option value="">Selecione...</option>
-            <template x-for="cid in cidades" :key="cid.id">
-                <option :value="cid.nome" x-text="cid.nome"></option>
-            </template>
-        </select>
-    </div>
-</div>
-
+                        <div>
+                            <label class="block text-sm font-medium">Cidade</label>
+                            <select name="cidade"
+                                    x-model="cidade"
+                                    :disabled="!uf || !cidades.length"
+                                    class="mt-1 w-full rounded border-gray-300 text-sm">
+                                <option value="">Selecione...</option>
+                                <template x-for="cid in cidades" :key="cid.id">
+                                    <option :value="cid.nome" x-text="cid.nome"></option>
+                                </template>
+                            </select>
+                        </div>
+                    </div>
 
                     <div class="mb-3">
                         <label class="block text-sm font-medium">Responsável</label>
@@ -242,43 +302,41 @@
 
     </div>
 
+    <!--- lista UF/cidade ----->
+    <script>
+        document.addEventListener('alpine:init', () => {
+            Alpine.data('incorporadoraLocalidade', () => ({
+                estados: [],
+                cidades: [],
+                uf: '',
+                cidade: '',
 
-<!--- lista UF/cidade ----->
-<script>
-    document.addEventListener('alpine:init', () => {
-        Alpine.data('incorporadoraLocalidade', () => ({
-            estados: [],
-            cidades: [],
-            uf: '',
-            cidade: '',
+                async loadEstados() {
+                    try {
+                        const res = await fetch('https://servicodados.ibge.gov.br/api/v1/localidades/estados?orderBy=nome');
+                        this.estados = await res.json();
+                    } catch (e) {
+                        console.error('Erro ao carregar estados IBGE', e);
+                    }
+                },
 
-            async loadEstados() {
-                try {
-                    const res = await fetch('https://servicodados.ibge.gov.br/api/v1/localidades/estados?orderBy=nome');
-                    this.estados = await res.json();
-                } catch (e) {
-                    console.error('Erro ao carregar estados IBGE', e);
+                async loadCidades() {
+                    this.cidades = [];
+                    this.cidade = '';
+
+                    if (!this.uf) return;
+
+                    try {
+                        const res = await fetch(
+                            `https://servicodados.ibge.gov.br/api/v1/localidades/estados/${this.uf}/municipios?orderBy=nome`
+                        );
+                        this.cidades = await res.json();
+                    } catch (e) {
+                        console.error('Erro ao carregar cidades IBGE', e);
+                    }
                 }
-            },
+            }));
+        });
+    </script>
 
-            async loadCidades() {
-                this.cidades = [];
-                this.cidade = '';
-
-                if (!this.uf) return;
-
-                try {
-                    const res = await fetch(
-                        `https://servicodados.ibge.gov.br/api/v1/localidades/estados/${this.uf}/municipios?orderBy=nome`
-                    );
-                    this.cidades = await res.json();
-                } catch (e) {
-                    console.error('Erro ao carregar cidades IBGE', e);
-                }
-            }
-        }));
-    });
-</script>
-
-    
 </x-app-layout>

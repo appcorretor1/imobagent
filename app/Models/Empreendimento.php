@@ -15,6 +15,8 @@ class Empreendimento extends Model
     'nome',
     'cidade',
     'uf',
+     'banner_thumb',
+    'logo_path',
     'endereco',
     'cep',
     'tipologia',

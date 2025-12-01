@@ -102,14 +102,17 @@
             </div>
 
             <div class="flex items-end">
-                <button
-                    id="uploadButton"
-                    type="submit"
-                    class="inline-flex items-center px-4 py-2 bg-indigo-600 text-white rounded hover:bg-indigo-700 transition disabled:bg-gray-400 disabled:cursor-not-allowed"
-                >
-                    <i data-lucide="upload-cloud" class="w-4 h-4 mr-2"></i>
-                    <span id="uploadButtonLabel">Enviar</span>
-                </button>
+               <button
+    id="uploadButton"
+    type="submit"
+    class="inline-flex items-center px-4 py-2 bg-indigo-600 text-white rounded hover:bg-indigo-700 transition disabled:bg-gray-400 disabled:cursor-not-allowed"
+>
+    <span id="uploadIconWrapper" class="w-4 h-4 mr-2 flex items-center justify-center">
+        <i data-lucide="upload-cloud" class="w-4 h-4"></i>
+    </span>
+    <span id="uploadButtonLabel">Enviar</span>
+</button>
+
             </div>
         </div>
     </form>
@@ -263,8 +266,6 @@
   </div>
 </x-app-layout>
 
-
-
 <script>
 document.getElementById('uploadForm').addEventListener('submit', function(e) {
     e.preventDefault();
@@ -275,10 +276,36 @@ document.getElementById('uploadForm').addEventListener('submit', function(e) {
     const progressContainer = document.getElementById('progressContainer');
     const progressBar = document.getElementById('progressBar');
     const progressText = document.getElementById('progressText');
+    const iconWrapper = document.getElementById('uploadIconWrapper');
+
+    // guarda o ícone original na primeira vez
+    if (!iconWrapper.dataset.originalIcon) {
+        iconWrapper.dataset.originalIcon = iconWrapper.innerHTML;
+    }
 
     // trava o botão
     button.disabled = true;
     buttonLabel.innerText = "Enviando...";
+
+    // troca ícone por spinner
+    iconWrapper.innerHTML = `
+        <svg class="animate-spin h-4 w-4 text-white" viewBox="0 0 24 24">
+            <circle
+                class="opacity-25"
+                cx="12"
+                cy="12"
+                r="10"
+                stroke="currentColor"
+                stroke-width="4"
+                fill="none"
+            ></circle>
+            <path
+                class="opacity-75"
+                fill="currentColor"
+                d="M4 12a8 8 0 018-8"
+            ></path>
+        </svg>
+    `;
 
     // mostra barra
     progressContainer.classList.remove('hidden');
@@ -297,6 +324,21 @@ document.getElementById('uploadForm').addEventListener('submit', function(e) {
         }
     });
 
+    function resetButtonState() {
+        button.disabled = false;
+        buttonLabel.innerText = "Enviar";
+
+        // restaura ícone original
+        if (iconWrapper.dataset.originalIcon) {
+            iconWrapper.innerHTML = iconWrapper.dataset.originalIcon;
+
+            // recria ícone Lucide, se estiver carregado
+            if (window.lucide && typeof lucide.createIcons === 'function') {
+                lucide.createIcons();
+            }
+        }
+    }
+
     // sucesso
     xhr.onload = function () {
         if (xhr.status === 200) {
@@ -313,15 +355,13 @@ document.getElementById('uploadForm').addEventListener('submit', function(e) {
             showToast("Erro ao enviar arquivos.", "error");
         }
 
-        button.disabled = false;
-        buttonLabel.innerText = "Enviar";
+        resetButtonState();
     };
 
     // erro de rede
     xhr.onerror = function () {
         showToast("Falha de conexão.", "error");
-        button.disabled = false;
-        buttonLabel.innerText = "Enviar";
+        resetButtonState();
     };
 
     xhr.send(formData);
@@ -341,4 +381,3 @@ function showToast(message, type = "success") {
     }, 3000);
 }
 </script>
-
