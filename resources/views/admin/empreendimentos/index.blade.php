@@ -23,6 +23,11 @@
         </div>
     </x-slot>
 
+    <h1 class="text-4xl font-extrabold text-red-600 bg-yellow-200 p-4 rounded mb-4">
+    DEBUG EMPREENDIMENTOS - VERSÃO NOVA
+</h1>
+
+
     <div x-data="{ showIncorporadoraModal: false }"
          class="max-w-7xl mx-auto sm:px-6 lg:px-8 py-6">
 
