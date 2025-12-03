@@ -9,6 +9,9 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Facades\Log;
+use Intervention\Image\Laravel\Facades\Image;
+use Illuminate\Http\UploadedFile;
+
 
 
 class EmpreendimentoController extends Controller
@@ -110,21 +113,21 @@ public function index(Request $request)
         }
     }
 
-    // Upload banner
-    if ($request->hasFile('banner_thumb')) {
-        $data['banner_thumb'] = $request->file('banner_thumb')->store(
-            "documentos/tenants/{$data['company_id']}/empreendimentos/banner",
-            's3'
-        );
-    }
+    // Upload banner (com compressão)
+if ($request->hasFile('banner_thumb')) {
+    $data['banner_thumb'] = $this->processAndStoreImage(
+        $request->file('banner_thumb'),
+        "documentos/tenants/{$data['company_id']}/empreendimentos/banner"
+    );
+}
 
-       // Upload logo
-    if ($request->hasFile('logo_path')) {
-        $data['logo_path'] = $request->file('logo_path')->store(
-            "documentos/tenants/{$data['company_id']}/empreendimentos/logo",
-            's3'
-        );
-    }
+if ($request->hasFile('logo_path')) {
+    $data['logo_path'] = $this->processAndStoreImage(
+        $request->file('logo_path'),
+        "documentos/tenants/{$data['company_id']}/empreendimentos/logo"
+    );
+}
+
 
     // 🔹 Cria o empreendimento
     $empreendimento = Empreendimento::create($data);
@@ -194,21 +197,28 @@ public function update(Request $request, Empreendimento $e)
         }
     }
 
-    // Upload banner
-    if ($request->hasFile('banner_thumb')) {
-        $data['banner_thumb'] = $request->file('banner_thumb')->store(
-            "documentos/tenants/{$e->company_id}/empreendimentos/banner",
-            's3'
-        );
-    }
+    // ✅ Pega company_id do próprio empreendimento
+$companyId = $e->company_id;
 
-    // Upload logo
-    if ($request->hasFile('logo_path')) {
-        $data['logo_path'] = $request->file('logo_path')->store(
-            "documentos/tenants/{$e->company_id}/empreendimentos/logo",
-            's3'
-        );
-    }
+// Upload banner (com compressão)
+if ($request->hasFile('banner_thumb')) {
+   $data['banner_thumb'] = $this->processAndStoreImage(
+    $request->file('banner_thumb'),
+    "documentos/tenants/{$companyId}/empreendimentos/banner",
+    's3',
+    true // 👉 THUMB
+);
+
+}
+
+// Upload logo (com compressão)
+if ($request->hasFile('logo_path')) {
+    $data['logo_path'] = $this->processAndStoreImage(
+        $request->file('logo_path'),
+        "documentos/tenants/{$companyId}/empreendimentos/logo"
+    );
+}
+
 
     $e->update($data);
 
@@ -351,6 +361,38 @@ public function updateTexto(Request $request, Empreendimento $e)
             ]);
         }
     }
+
+    /**
+ * Salva uma imagem comprimida na S3, reduzindo ~40% o tamanho do arquivo.
+ */
+
+protected function processAndStoreImage(UploadedFile $file, string $path, string $disk = 's3', bool $isThumb = false): string
+{
+    $image = Image::read($file);
+
+    if ($isThumb) {
+        // 🟢 Se for thumb: reduz proporcionalmente até width 1000px (se necessário)
+        $image->scaleDown(width: 1000);
+    } else {
+        // 🔵 Se NÃO for thumb: apenas reduz 40% do tamanho original
+        $originalWidth = $image->width();
+        $newWidth = (int) round($originalWidth * 0.6);
+        $image->scale(width: $newWidth);
+    }
+
+    // Codificação da imagem
+    $extension = strtolower($file->getClientOriginalExtension() ?: 'jpg');
+    $encoded = $image->encodeByExtension($extension, quality: 70);
+
+    // Nome único
+    $filename = uniqid('emp_', true) . '.' . $extension;
+    $fullPath = trim($path, '/') . '/' . $filename;
+
+    Storage::disk($disk)->put($fullPath, (string) $encoded);
+
+    return $fullPath;
+}
+
 
 
 }

@@ -48,59 +48,143 @@
         @endunless
 
    
-
-    {{-- KPIs --}}
+{{-- KPIs --}}
 <div class="dashboard-grid" style="--cols: {{ $isGestor ? 4 : 3 }}">
     {{-- Total de mensagens --}}
-    <div class="bg-white rounded-xl shadow p-4">
-        <div class="text-sm text-slate-600">
-            {{ $isGestor ? 'Total de mensagens' : 'Suas mensagens com a IA' }}
-        </div>
-        <div class="text-3xl font-semibold mt-2">
-            {{ number_format($kpis['totalConversas'] ?? 0, 0, ',', '.') }}
+    <div class="group relative bg-white rounded-xl shadow border-l-2 border-l-blue-500 border-t border-r border-b border-slate-100 p-6 hover:shadow-md transition-all duration-300 overflow-hidden">
+        {{-- Decorative gradient overlay on hover --}}
+        <div class="absolute inset-0 bg-gradient-to-br from-transparent via-transparent to-slate-50/50 opacity-0 group-hover:opacity-100 transition-opacity duration-500"></div>
+        
+        {{-- Content --}}
+        <div class="relative">
+            {{-- Icon --}}
+            <div class="inline-flex items-center justify-center w-11 h-11 rounded-lg bg-blue-50 text-blue-600 mb-5">
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"></path>
+                </svg>
+            </div>
+            
+            {{-- Title --}}
+            <div class="text-xs uppercase tracking-wider text-slate-400 mb-3">
+                {{ $isGestor ? 'Total de mensagens' : 'Suas mensagens com a IA' }}
+            </div>
+            
+            {{-- Value --}}
+            <div class="text-3xl font-semibold text-slate-900 tracking-tight mb-2">
+                {{ number_format($kpis['totalConversas'] ?? 0, 0, ',', '.') }}
+            </div>
+            
+            {{-- Subtitle --}}
+            <div class="text-xs text-slate-500">
+                Volume total de conversas
+            </div>
         </div>
     </div>
 
     {{-- Corretores ativos (só gestor) --}}
     @if($isGestor)
-        <div class="bg-white rounded-xl shadow p-4">
-            <div class="text-sm text-slate-600">Corretores ativos</div>
-            <div class="text-3xl font-semibold mt-2">
-                {{ $kpis['corretoresAtivos'] ?? 0 }}
+        <div class="group relative bg-white rounded-xl shadow border-l-2 border-l-purple-500 border-t border-r border-b border-slate-100 p-6 hover:shadow-md transition-all duration-300 overflow-hidden">
+            {{-- Decorative gradient overlay on hover --}}
+            <div class="absolute inset-0 bg-gradient-to-br from-transparent via-transparent to-slate-50/50 opacity-0 group-hover:opacity-100 transition-opacity duration-500"></div>
+            
+            {{-- Content --}}
+            <div class="relative">
+                {{-- Icon --}}
+                <div class="inline-flex items-center justify-center w-11 h-11 rounded-lg bg-purple-50 text-purple-600 mb-5">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"></path>
+                    </svg>
+                </div>
+                
+                {{-- Title --}}
+                <div class="text-xs uppercase tracking-wider text-slate-400 mb-3">
+                    Corretores ativos
+                </div>
+                
+                {{-- Value --}}
+                <div class="text-3xl font-semibold text-slate-900 tracking-tight mb-2">
+                    {{ $kpis['corretoresAtivos'] ?? 0 }}
+                </div>
+                
+                {{-- Subtitle --}}
+                <div class="text-xs text-slate-500">
+                    Usuários engajados
+                </div>
             </div>
         </div>
     @endif
 
     {{-- Tempo médio de resposta da IA --}}
-    <div class="bg-white rounded-xl shadow p-4">
-        <div class="text-sm text-slate-600">
-            Tempo médio de resposta da IA
-        </div>
-        <div class="text-3xl font-semibold mt-2">
-            @if(!empty($kpis['tempoMedioIA']))
-                {{ number_format($kpis['tempoMedioIA'], 1, ',', '.') }}s
-            @else
-                —
-            @endif
+    <div class="group relative bg-white rounded-xl shadow border-l-2 border-l-emerald-500 border-t border-r border-b border-slate-100 p-6 hover:shadow-md transition-all duration-300 overflow-hidden">
+        {{-- Decorative gradient overlay on hover --}}
+        <div class="absolute inset-0 bg-gradient-to-br from-transparent via-transparent to-slate-50/50 opacity-0 group-hover:opacity-100 transition-opacity duration-500"></div>
+        
+        {{-- Content --}}
+        <div class="relative">
+            {{-- Icon --}}
+            <div class="inline-flex items-center justify-center w-11 h-11 rounded-lg bg-emerald-50 text-emerald-600 mb-5">
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                </svg>
+            </div>
+            
+            {{-- Title --}}
+            <div class="text-xs uppercase tracking-wider text-slate-400 mb-3">
+                Tempo médio da IA
+            </div>
+            
+            {{-- Value --}}
+            <div class="text-3xl font-semibold text-slate-900 tracking-tight mb-2">
+                @if(!empty($kpis['tempoMedioIA']))
+                    {{ number_format($kpis['tempoMedioIA'], 1, ',', '.') }}s
+                @else
+                    —
+                @endif
+            </div>
+            
+            {{-- Subtitle --}}
+            <div class="text-xs text-slate-500">
+                Velocidade de resposta
+            </div>
         </div>
     </div>
 
     {{-- Média de perguntas --}}
-    <div class="bg-white rounded-xl shadow p-4">
-        <div class="text-sm text-slate-600">
-            {{ $isGestor ? 'Média de perguntas por corretor' : 'Média diária de perguntas (você)' }}
-        </div>
-        <div class="text-3xl font-semibold mt-2">
-            {{ number_format($kpis['mediaPerguntasCorretor'] ?? 0, 1, ',', '.') }}
+    <div class="group relative bg-white rounded-xl shadow border-l-2 border-l-amber-500 border-t border-r border-b border-slate-100 p-6 hover:shadow-md transition-all duration-300 overflow-hidden">
+        {{-- Decorative gradient overlay on hover --}}
+        <div class="absolute inset-0 bg-gradient-to-br from-transparent via-transparent to-slate-50/50 opacity-0 group-hover:opacity-100 transition-opacity duration-500"></div>
+        
+        {{-- Content --}}
+        <div class="relative">
+            {{-- Icon --}}
+            <div class="inline-flex items-center justify-center w-11 h-11 rounded-lg bg-amber-50 text-amber-600 mb-5">
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6"></path>
+                </svg>
+            </div>
+            
+            {{-- Title --}}
+            <div class="text-xs uppercase tracking-wider text-slate-400 mb-3">
+                {{ $isGestor ? 'Média por corretor' : 'Média diária (você)' }}
+            </div>
+            
+            {{-- Value --}}
+            <div class="text-3xl font-semibold text-slate-900 tracking-tight mb-2">
+                {{ number_format($kpis['mediaPerguntasCorretor'] ?? 0, 1, ',', '.') }}
+            </div>
+            
+            {{-- Subtitle --}}
+            <div class="text-xs text-slate-500">
+                Perguntas realizadas
+            </div>
         </div>
     </div>
 </div>
 
-
         {{-- Evolução de conversas --}}
         <div class="bg-white rounded-xl shadow p-4">
             <div class="flex items-center justify-between mb-4">
-                <h3 class="font-semibold">Evolução de conversas por dia</h3>
+                <h3 class="font-semibold">Conversas por dia</h3>
             </div>
             <div class="mt-2">
                 <div id="chartTimeline" class="w-full" style="height: 260px;"></div>

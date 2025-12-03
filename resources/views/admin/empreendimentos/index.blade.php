@@ -113,9 +113,11 @@
                             ? Storage::disk('s3')->url($emp->incorporadora->logo_path)
                             : null;
                     @endphp
+<div class="bg-white rounded-xl border overflow-hidden flex flex-col
+     transition-all duration-300
+     hover:border-blue-500 hover:shadow-[0_4px_12px_rgba(0,0,0,0.12)] hover:-translate-y-1">
 
-                    <div class="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden flex flex-col">
-                        {{-- BANNER / THUMB --}}
+{{-- BANNER / THUMB --}}
                         <div class="relative h-32 bg-slate-100">
                             @if($bannerUrl)
                                 <img src="{{ $bannerUrl }}"
