@@ -388,7 +388,7 @@ xhr.onload = function () {
         showTrainingModal();
 
         // mantém o modal por 5 segundos antes de recarregar
-        setTimeout(() => location.reload(), 5000);
+        setTimeout(() => location.reload(), 8000);
 
     } else {
         showToast("Erro ao enviar arquivos.", "error");
