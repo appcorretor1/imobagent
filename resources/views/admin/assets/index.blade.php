@@ -208,8 +208,11 @@
 
                 <tr class="border-b">
                   <td class="py-2 px-3 align-top">
-                    <div class="font-medium text-gray-900">{{ $a->original_name }}</div>
-                   
+                    <div class="font-medium text-gray-900">
+    {{ $a->original_name }}<br>
+   
+</div>
+
                   </td>
                   <td class="py-2 px-3 align-top">{{ $a->kind ?? '-' }}</td>
                   <td class="py-2 px-3 align-top">{{ $human }}</td>
@@ -224,9 +227,9 @@
                       {{ $statusLabel }}
                     </span>
 
-                    @if($a->openai_vector_store_id)
+                    <!--- @if($a->openai_vector_store_id)
                       <div class="text-[11px] text-gray-400 mt-1">VS: {{ $a->openai_vector_store_id }}</div>
-                    @endif
+                    @endif --->
                   </td>
                 <td class="py-2 px-3 align-top">
   @if($a->error_info)
