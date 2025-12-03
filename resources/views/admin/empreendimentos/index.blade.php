@@ -1,6 +1,13 @@
 @php
     use Illuminate\Support\Facades\Storage;
 @endphp
+@if(session('ok'))
+    <script>
+        window.dispatchEvent(new CustomEvent('toast', {
+            detail: { message: "{{ session('ok') }}" }
+        }))
+    </script>
+@endif
 
 <x-app-layout>
     <x-slot name="header">
@@ -34,35 +41,56 @@
         @endif
 
         {{-- FILTROS --}}
-        <form method="GET" class="mb-4 bg-white p-4 rounded shadow flex flex-wrap gap-4 items-end">
-            <div class="flex-1 min-w-[200px]">
-                <label class="block text-xs font-medium text-gray-600">Buscar por nome</label>
-                <input type="text" name="search" value="{{ request('search') }}"
-                       class="mt-1 w-full rounded border-gray-300 text-sm"
-                       placeholder="Ex: Atelier Opus">
-            </div>
+      <form method="GET"
+      class="mb-4 bg-white p-4 rounded shadow flex flex-wrap gap-4 items-end">
 
-            <div class="w-full sm:w-64">
-                <label class="block text-xs font-medium text-gray-600">Incorporadora</label>
-                <select name="incorporadora_id"
-                        class="mt-1 w-full rounded border-gray-300 text-sm">
-                    <option value="">Todas</option>
-                    @foreach($incorporadoras as $inc)
-                        <option value="{{ $inc->id }}"
-                            @selected((string)request('incorporadora_id') === (string)$inc->id)>
-                            {{ $inc->nome }}@if($inc->cidade || $inc->uf) — {{ $inc->cidade }}/{{ $inc->uf }} @endif
-                        </option>
-                    @endforeach
-                </select>
-            </div>
+    {{-- BUSCA POR NOME --}}
+    <div class="flex-1 min-w-[220px]">
+        <label class="block text-xs font-medium text-gray-600">Buscar por nome</label>
+        <input type="text" name="search" value="{{ request('search') }}"
+               class="mt-1 w-full rounded border-gray-300 text-sm"
+               placeholder="Ex: Atelier Opus">
+    </div>
 
-            <div class="flex gap-2">
-                <button type="submit"
-                        class="px-4 py-2 rounded bg-gray-800 text-white text-sm hover:bg-gray-900">
-                    Filtrar
-                </button>
-            </div>
-        </form>
+    {{-- INCORPORADORA --}}
+    <div class="w-48 min-w-[180px]">
+        <label class="block text-xs font-medium text-gray-600">Incorporadora</label>
+        <select name="incorporadora_id"
+                class="mt-1 w-full rounded border-gray-300 text-sm">
+            <option value="">Todas</option>
+            @foreach($incorporadoras as $inc)
+                <option value="{{ $inc->id }}"
+                    @selected((string)request('incorporadora_id') === (string)$inc->id)>
+                    {{ $inc->nome }}@if($inc->cidade || $inc->uf) — {{ $inc->cidade }}/{{ $inc->uf }} @endif
+                </option>
+            @endforeach
+        </select>
+    </div>
+
+    {{-- STATUS --}}
+    <div class="w-40 min-w-[150px]">
+        <label class="block text-xs font-medium text-gray-600">Status</label>
+        <select name="status"
+                class="mt-1 w-full rounded border-gray-300 text-sm">
+            <option value="ativo" {{ request('status', 'ativo') === 'ativo' ? 'selected' : '' }}>
+                Ativos
+            </option>
+            <option value="todos" {{ request('status') === 'todos' ? 'selected' : '' }}>
+                Todos
+            </option>
+        </select>
+    </div>
+
+    {{-- BOTÃO FILTRAR --}}
+    <div class="flex items-end">
+        <button type="submit"
+                class="px-4 py-2 rounded bg-gray-800 text-white text-sm hover:bg-gray-900 whitespace-nowrap">
+            Filtrar
+        </button>
+    </div>
+
+</form>
+
 
         {{-- CARDS DE EMPREENDIMENTOS --}}
         @if($empreendimentos->isEmpty())
@@ -194,18 +222,8 @@
                                     Editar
                                 </a>
 
-                                {{-- EXCLUIR --}}
-                                <form action="{{ route('admin.empreendimentos.destroy', $emp->id) }}"
-                                      method="POST"
-                                      class="flex-1 min-w-[120px]"
-                                      onsubmit="return confirm('Tem certeza que deseja excluir este empreendimento?');">
-                                    @csrf
-                                    @method('DELETE')
-                                    <button type="submit"
-                                            class="w-full inline-flex items-center justify-center px-3 py-1.5 rounded text-xs font-medium border border-red-400 text-red-600 hover:bg-red-50">
-                                        Excluir
-                                    </button>
-                                </form>
+                               
+
                             </div>
                         </div>
                     </div>

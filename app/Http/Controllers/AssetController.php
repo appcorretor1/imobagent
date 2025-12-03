@@ -82,17 +82,17 @@ class AssetController extends Controller
 
                 $mime = $file->getMimeType() ?: 'application/octet-stream';
 
-                $asset = KnowledgeAsset::create([
-                    'company_id'        => $e->company_id,
-                    'empreendimento_id' => $e->id,
-                    'original_name'     => $origName,
-                    'mime'              => $mime,
-                    'disk'              => $disk,        // <- IMPORTANTE
-                    'path'              => $storedPath,  // <- IMPORTANTE
-                    'kind' => $this->detectKind($file->getMimeType(), $ext),
-                    'status'            => 'pending',
-                    'size'              => $size,
-                ]);
+              $asset = KnowledgeAsset::create([
+    'company_id'        => $e->company_id,
+    'empreendimento_id' => $e->id,
+    'original_name'     => $origName,
+    'mime'              => $mime,
+    'disk'              => $disk,
+    'path'              => $storedPath,
+    'kind'              => $this->detectKind($file->getMimeType(), $ext),
+    'status'            => 'pending',
+    'size'              => $size,
+]);
 
                 \Log::info('assets.upload.saved', [
                     'asset_id'   => $asset->id,
@@ -104,6 +104,11 @@ class AssetController extends Controller
 
                 // dispara ingestão (job usa assinatura legada: ($vsId, $asset))
                 \App\Jobs\IngestKnowledgeAsset::dispatch($asset->id);
+
+        // 🔥 treinamento automático da IA via PDF
+if ($asset->kind === 'pdf' || $mime === 'application/pdf') {
+    \App\Jobs\TrainEmpreendimentoFromPdf::dispatch($asset->id);
+}
 
             } catch (\Throwable $ex) {
                 \Log::error('assets.upload.exception', [

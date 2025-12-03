@@ -28,6 +28,32 @@ div#chatBox {
 
     </head>
     <body class="font-sans antialiased">
+{{-- 🎉 Toast global --}}
+<div
+    x-data="{ show: false, message: '' }"
+    x-show="show"
+    x-transition.opacity.duration.400ms
+    x-cloak
+    class="fixed top-4 right-4 z-50"
+    @toast.window="
+        message = $event.detail.message;
+        show = true;
+        setTimeout(() => show = false, 3000);
+    "
+>
+    <div class="bg-green-600 text-white px-4 py-2 rounded shadow-lg flex items-center gap-2">
+        <!-- Ícone -->
+        <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5" fill="none" viewBox="0 0 24 24"
+             stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                  d="M5 13l4 4L19 7"/>
+        </svg>
+
+        <span x-text="message"></span>
+    </div>
+</div>
+
+
         <div class="min-h-screen bg-gray-100">
             @include('layouts.navigation')
 

@@ -36,12 +36,15 @@ Route::get('/', fn () => view('welcome'));
 /* VERIFICA NUMERO USUARIO */
 Route::get('/usuarios/check', [UserCheckController::class, 'check']);
 
+
+//dashboard filtrado | gestor e corretor
+  Route::get('/dashboard', [DashboardGestorController::class, 'index'])
+            ->name('admin.dashboard');
 Route::middleware(['auth', 'verified', 'role:diretor'])
     ->prefix('admin')
     ->group(function () {
 
-        Route::get('/dashboard', [DashboardGestorController::class, 'index'])
-            ->name('admin.dashboard');
+      
 
         Route::get('/dashboard/pdf', [DashboardGestorController::class, 'exportPdf'])
             ->name('admin.dashboard.pdf');
@@ -96,6 +99,8 @@ Route::middleware(['auth', 'verified', 'tenant'])
         Route::resource('empreendimentos', EmpreendimentoController::class)
             ->parameters(['empreendimentos' => 'e'])
             ->whereNumber('e');
+
+         Route::delete('/empreendimentos/{empreendimento}', [EmpreendimentoController::class, 'destroy'])->name('empreendimentos.destroy');
 
            // 🔹 INCORPORADORAS (sem prefix extra, sem "admin." duplicado)
         Route::get('incorporadoras', [IncorporadoraController::class, 'index'])

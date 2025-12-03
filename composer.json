@@ -15,7 +15,7 @@
         "openai-php/client": "^0.18.0",
         "phpoffice/phpspreadsheet": "^2.0",
         "phpoffice/phpword": "^1.2",
-        "smalot/pdfparser": "^2.9",
+        "smalot/pdfparser": "^2.12",
         "spatie/pdf-to-text": "^1.54"
     },
     "require-dev": {

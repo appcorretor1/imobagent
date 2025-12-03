@@ -18,10 +18,6 @@
     </div>
   </x-slot>
 
-  @if($assets->whereIn('status',['pending','processing'])->isNotEmpty())
-    {{-- Auto refresh a cada 6s enquanto houver itens processando --}}
-    <meta http-equiv="refresh" content="6">
-  @endif
 
   <div class="max-w-7xl mx-auto sm:px-6 lg:px-8 space-y-6">
 
@@ -117,10 +113,45 @@
         </div>
     </form>
 </div>
-
 <!-- TOAST -->
 <div id="toast"
      class="hidden fixed bottom-6 right-6 px-4 py-3 rounded shadow text-white text-sm z-50">
+</div>
+
+<!-- MODAL TREINAMENTO IA -->
+<div id="trainingModal"
+     class="hidden fixed inset-0 z-40 flex items-center justify-center bg-slate-900/40 backdrop-blur-sm">
+    <div class="bg-white rounded-2xl shadow-xl max-w-sm w-full mx-4 p-6 text-center space-y-4">
+        <div class="flex justify-center">
+            <svg class="h-10 w-10 animate-spin text-indigo-600" viewBox="0 0 24 24">
+                <circle
+                    class="opacity-25"
+                    cx="12" cy="12"
+                    r="10"
+                    stroke="currentColor"
+                    stroke-width="4"
+                    fill="none"
+                ></circle>
+                <path
+                    class="opacity-75"
+                    fill="currentColor"
+                    d="M4 12a8 8 0 018-8"
+                ></path>
+            </svg>
+        </div>
+        <div>
+            <h2 class="text-lg font-semibold text-slate-900">
+                Treinando a IA com o novo arquivo
+            </h2>
+            <p class="mt-1 text-sm text-slate-600">
+                Já estamos processando os PDFs e atualizando o conhecimento deste empreendimento.
+                Isso pode levar alguns instantes.
+            </p>
+        </div>
+        <p class="text-xs text-slate-400">
+            A página será atualizada automaticamente para mostrar o status.
+        </p>
+    </div>
 </div>
 
 
@@ -178,9 +209,7 @@
                 <tr class="border-b">
                   <td class="py-2 px-3 align-top">
                     <div class="font-medium text-gray-900">{{ $a->original_name }}</div>
-                    <div class="text-xs text-gray-500 break-all">
-                      <span class="mr-1 text-gray-400">path:</span>{{ $a->path }}
-                    </div>
+                   
                   </td>
                   <td class="py-2 px-3 align-top">{{ $a->kind ?? '-' }}</td>
                   <td class="py-2 px-3 align-top">{{ $human }}</td>
@@ -315,7 +344,7 @@ document.getElementById('uploadForm').addEventListener('submit', function(e) {
 
     xhr.open("POST", form.action);
 
-    // progresso com animação suave (já está na classe: transition-all duration-300 ease-out)
+    // progresso com animação suave
     xhr.upload.addEventListener("progress", function(e) {
         if (e.lengthComputable) {
             let percent = Math.round((e.loaded / e.total) * 100);
@@ -332,31 +361,41 @@ document.getElementById('uploadForm').addEventListener('submit', function(e) {
         if (iconWrapper.dataset.originalIcon) {
             iconWrapper.innerHTML = iconWrapper.dataset.originalIcon;
 
-            // recria ícone Lucide, se estiver carregado
             if (window.lucide && typeof lucide.createIcons === 'function') {
                 lucide.createIcons();
             }
         }
     }
 
-    // sucesso
-    xhr.onload = function () {
-        if (xhr.status === 200) {
-            showToast("Arquivos enviados com sucesso!", "success");
-
-            // reset
-            form.reset();
-            progressBar.style.width = "0%";
-            progressText.innerText = "0%";
-
-            // recarregar lista automaticamente (se quiser)
-            setTimeout(() => location.reload(), 800);
-        } else {
-            showToast("Erro ao enviar arquivos.", "error");
+    function showTrainingModal() {
+        const modal = document.getElementById('trainingModal');
+        if (modal) {
+            modal.classList.remove('hidden');
         }
+    }
 
+   // sucesso
+xhr.onload = function () {
+    if (xhr.status === 200) {
+        showToast("Arquivos enviados com sucesso!", "success");
+
+        // reset
+        form.reset();
+        progressBar.style.width = "0%";
+        progressText.innerText = "0%";
+
+        // mostra modal de treinamento
+        showTrainingModal();
+
+        // mantém o modal por 5 segundos antes de recarregar
+        setTimeout(() => location.reload(), 5000);
+
+    } else {
+        showToast("Erro ao enviar arquivos.", "error");
         resetButtonState();
-    };
+    }
+};
+
 
     // erro de rede
     xhr.onerror = function () {

@@ -4,6 +4,7 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\Schema;
+use App\Http\Controllers\Log;
 
 class Empreendimento extends Model
 {
@@ -63,6 +64,12 @@ public function unidades()
 {
     return $this->hasMany(\App\Models\EmpreendimentoUnidade::class);
 }
+
+public function assets()
+{
+    return $this->hasMany(Asset::class);
+}
+
 
 
 }

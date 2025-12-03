@@ -8,6 +8,8 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Facades\Log;
+
 
 class EmpreendimentoController extends Controller
 {
@@ -22,7 +24,19 @@ public function index(Request $request)
         ->orderBy('nome')
         ->get();
 
+    // 👇 status vem da query string, default = 'ativo'
+    $status = $request->input('status', 'ativo');
+
     $q = Empreendimento::where('company_id', $companyId);
+
+    // 👇 aplica filtro de ativo / todos
+    if ($status === 'ativo') {
+        $q->where('ativo', 1);
+    }
+    // se quiser futuramente, dá pra ter 'inativo' também:
+    // if ($status === 'inativo') {
+    //     $q->where('ativo', 0);
+    // }
 
     if ($request->filled('incorporadora_id')) {
         $q->where('incorporadora_id', $request->incorporadora_id);
@@ -36,7 +50,7 @@ public function index(Request $request)
         ->paginate(15)
         ->withQueryString();
 
-    return view('admin.empreendimentos.index', compact('empreendimentos', 'incorporadoras'));
+    return view('admin.empreendimentos.index', compact('empreendimentos', 'incorporadoras', 'status'));
 }
 
 
@@ -206,10 +220,19 @@ public function update(Request $request, Empreendimento $e)
     /**
      * Remove the specified resource from storage.
      */
-    public function destroy(Empreendimento $empreendimento)
-    {
-        //
-    }
+public function destroy($id)
+{
+    $empreendimento = Empreendimento::findOrFail($id);
+
+    // “Exclui” desativando
+    $empreendimento->ativo = 0;
+    $empreendimento->save();
+
+    return redirect()
+        ->route('admin.empreendimentos.index')
+        ->with('ok', 'Empreendimento excluído com sucesso!');
+}
+
 
     public function editTexto(Empreendimento $e)
 {
