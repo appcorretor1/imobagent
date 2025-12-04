@@ -15,20 +15,16 @@
         $logoUrl = asset('images/logo-default.png');
     }
 
-    // Cor do navbar
+    // Cor whitelabel da navbar
     $navColor = $company->primary_color ?? '#ffffff';
 
-    // Define claro ou escuro
+    // Determina se a navbar é escura ou clara
     $isDark = ColorHelper::isDark($navColor);
 
-    // Cores globais
+    // Cores globais de texto
     $navText        = $isDark ? 'text-white'       : 'text-gray-800';
     $navTextSecondary = $isDark ? 'text-gray-200' : 'text-gray-600';
     $navHover       = $isDark ? 'hover:text-gray-200' : 'hover:text-gray-900';
-
-    // Cor do dropdown
-    $dropdownText = $isDark ? 'text-white' : 'text-gray-700';
-    $dropdownBg   = $isDark ? 'bg-gray-800' : 'bg-white';
 @endphp
 
 <nav x-data="{ open: false }"
@@ -39,7 +35,7 @@
     <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div class="flex justify-between h-16">
 
-            <!-- Left (Logo + Menu) -->
+            <!-- Left Section -->
             <div class="flex items-center">
 
                 <!-- Logo -->
@@ -47,7 +43,7 @@
                     <img src="{{ $logoUrl }}" alt="Logo" class="h-8 w-auto object-contain">
                 </a>
 
-                <!-- Menu Desktop -->
+                <!-- Desktop Menu -->
                 <div class="hidden sm:flex space-x-8 sm:ms-10">
 
                     <x-nav-link 
@@ -69,82 +65,80 @@
                 </div>
             </div>
 
+            <!-- Right Section (Dropdown) -->
+            <div class="hidden sm:flex sm:items-center sm:ml-6">
 
-           <!-- Right Side (User Dropdown) -->
-<div class="hidden sm:flex sm:items-center sm:ml-6">
+                <x-dropdown align="right" width="48">
 
-    <x-dropdown align="right" width="48">
+                    <!-- Trigger -->
+                    <x-slot name="trigger">
+                        <button class="flex items-center gap-2 {{ $navText }} {{ $navHover }} font-medium focus:outline-none">
 
-        <!-- Trigger -->
-        <x-slot name="trigger">
-            <button class="flex items-center gap-2 {{ $navText }} {{ $navHover }} font-medium focus:outline-none">
+                            <span>{{ Auth::user()->name }}</span>
 
-                <span>{{ Auth::user()->name }}</span>
+                            <span class="inline-flex items-center justify-center h-8 w-8 rounded-full 
+                                {{ $isDark ? 'bg-white text-gray-800' : 'bg-gray-800 text-white' }}">
+                                {{ Str::substr(Auth::user()->name, 0, 2) }}
+                            </span>
 
-                <!-- Avatar ajustado conforme fundo da navbar -->
-                <span class="inline-flex items-center justify-center h-8 w-8 rounded-full 
-                    {{ $isDark ? 'bg-white text-gray-800' : 'bg-gray-800 text-white' }}">
-                    {{ Str::substr(Auth::user()->name, 0, 2) }}
-                </span>
+                        </button>
+                    </x-slot>
 
-            </button>
-        </x-slot>
+                    <!-- Dropdown Menu -->
+                    <x-slot name="content">
 
-        <!-- Dropdown (sempre branco) -->
-        <x-slot name="content">
+                        <div class="bg-white p-2 rounded-md shadow-md">
 
-            <div class="bg-white p-2 rounded-md shadow-md">
+                            @if(auth()->user()->role === 'diretor')
+                                <x-dropdown-link :href="route('admin.users.index')" class="text-gray-700">
+                                    Gestão de usuários
+                                </x-dropdown-link>
 
-                @if(auth()->user()->role === 'diretor')
-                    <x-dropdown-link :href="route('admin.users.index')" class="text-gray-700">
-                        Gestão de usuários
-                    </x-dropdown-link>
+                                <x-dropdown-link :href="route('admin.company.edit')" class="text-gray-700">
+                                    Dados da empresa
+                                </x-dropdown-link>
+                            @endif
 
-                    <x-dropdown-link :href="route('admin.company.edit')" class="text-gray-700">
-                        Dados da empresa
-                    </x-dropdown-link>
-                @endif
+                            <x-dropdown-link :href="route('profile.edit')" class="text-gray-700">
+                                Perfil
+                            </x-dropdown-link>
 
-                <x-dropdown-link :href="route('profile.edit')" class="text-gray-700">
-                    Perfil
-                </x-dropdown-link>
+                            <form method="POST" action="{{ route('logout') }}">
+                                @csrf
+                                <x-dropdown-link 
+                                    href="{{ route('logout') }}"
+                                    onclick="event.preventDefault(); this.closest('form').submit();"
+                                    class="text-gray-700">
+                                    Sair
+                                </x-dropdown-link>
+                            </form>
 
-                <!-- Logout -->
-                <form method="POST" action="{{ route('logout') }}">
-                    @csrf
-                    <x-dropdown-link 
-                        href="{{ route('logout') }}" 
-                        onclick="event.preventDefault(); this.closest('form').submit();"
-                        class="text-gray-700">
-                        Sair
-                    </x-dropdown-link>
-                </form>
+                        </div>
+
+                    </x-slot>
+
+                </x-dropdown>
+
             </div>
 
-        </x-slot>
-
-    </x-dropdown>
-</div>
-
-
-
-            <!-- Mobile Hamburger -->
+            <!-- Mobile Hamburger Button -->
             <div class="-me-2 flex items-center sm:hidden">
                 <button @click="open = ! open"
                     class="p-2 rounded-md {{ $navText }} {{ $navHover }} focus:outline-none transition">
                     <svg class="h-6 w-6" stroke="currentColor" fill="none" viewBox="0 0 24 24">
                         <path :class="{'hidden': open, 'inline-flex': ! open }"
-                              class="inline-flex"
-                              stroke-linecap="round"
-                              stroke-linejoin="round"
-                              stroke-width="2"
-                              d="M4 6h16M4 12h16M4 18h16" />
+                            class="inline-flex"
+                            stroke-linecap="round"
+                            stroke-linejoin="round"
+                            stroke-width="2"
+                            d="M4 6h16M4 12h16M4 18h16" />
+
                         <path :class="{'hidden': ! open, 'inline-flex': open }"
-                              class="hidden"
-                              stroke-linecap="round"
-                              stroke-linejoin="round"
-                              stroke-width="2"
-                              d="M6 18L18 6M6 6l12 12" />
+                            class="hidden"
+                            stroke-linecap="round"
+                            stroke-linejoin="round"
+                            stroke-width="2"
+                            d="M6 18L18 6M6 6l12 12" />
                     </svg>
                 </button>
             </div>
@@ -152,13 +146,14 @@
         </div>
     </div>
 
-
-
     <!-- Mobile Menu -->
-    <div :class="{'block': open, 'hidden': ! open}" class="hidden sm:hidden {{ $navText }} {{ $navHover }}">
+    <div :class="{'block': open, 'hidden': ! open}" class="hidden sm:hidden {{ $navText }}">
 
         <div class="pt-2 pb-3 space-y-1">
-            <x-responsive-nav-link :href="route('admin.dashboard')" :active="request()->routeIs('admin.dashboard')" class="{{ $navText }}">
+
+            <x-responsive-nav-link :href="route('admin.dashboard')" 
+                                   :active="request()->routeIs('admin.dashboard')"
+                                   class="{{ $navText }}">
                 Dashboard
             </x-responsive-nav-link>
 
@@ -170,10 +165,10 @@
                     Empreendimentos
                 </x-responsive-nav-link>
             @endif
+
         </div>
 
-
-        <!-- Mobile User Info -->
+        <!-- User Info Mobile -->
         <div class="pt-4 pb-1 border-t border-gray-300">
             <div class="px-4">
                 <div class="font-medium text-base {{ $navText }}">{{ Auth::user()->name }}</div>
@@ -186,7 +181,6 @@
                     Perfil
                 </x-responsive-nav-link>
 
-                <!-- Logout -->
                 <form method="POST" action="{{ route('logout') }}">
                     @csrf
                     <x-responsive-nav-link 
