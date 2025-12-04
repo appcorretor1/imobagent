@@ -1,108 +1,137 @@
 @php
-    $role = auth()->user()->role ?? null;
+    use Illuminate\Support\Facades\Storage;
+    use Illuminate\Support\Str;
+    use App\Helpers\ColorHelper;
 
-    // Pega a empresa logada (ajuste se o relacionamento tiver outro nome)
+    $role = auth()->user()->role ?? null;
     $company = auth()->user()->company ?? null;
 
-    // Monta a URL da logo
-    $logoUrl = null;
-
+    // Logo da empresa
     if ($company && $company->logo_path) {
-        // Se o campo já vier com URL completa (https://...)
-        if (Str::startsWith($company->logo_path, ['http://', 'https://'])) {
-            $logoUrl = $company->logo_path;
-        } else {
-            // Se for só o path do arquivo no S3
-            $logoUrl = Storage::disk('s3')->url($company->logo_path);
-        }
+        $logoUrl = Str::startsWith($company->logo_path, ['http://', 'https://'])
+            ? $company->logo_path
+            : Storage::disk('s3')->url($company->logo_path);
     } else {
-        // Fallback: logo padrão da aplicação
         $logoUrl = asset('images/logo-default.png');
     }
+
+    // Cor do navbar
+    $navColor = $company->primary_color ?? '#ffffff';
+
+    // Define claro ou escuro
+    $isDark = ColorHelper::isDark($navColor);
+
+    // Cores globais
+    $navText        = $isDark ? 'text-white'       : 'text-gray-800';
+    $navTextSecondary = $isDark ? 'text-gray-200' : 'text-gray-600';
+    $navHover       = $isDark ? 'hover:text-gray-200' : 'hover:text-gray-900';
+
+    // Cor do dropdown
+    $dropdownText = $isDark ? 'text-white' : 'text-gray-700';
+    $dropdownBg   = $isDark ? 'bg-gray-800' : 'bg-white';
 @endphp
 
-<nav x-data="{ open: false }" class="bg-white border-b border-gray-100">
-    <!-- Primary Navigation Menu -->
+<nav x-data="{ open: false }"
+     class="border-b border-gray-200"
+     style="background-color: {{ $navColor }}">
+
+    <!-- Primary Navigation -->
     <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div class="flex justify-between h-16">
-            <div class="flex">
-                <!-- Logo -->
-                <div class="shrink-0 flex items-center">
-                    <a href="{{ route('admin.dashboard') }}" class="flex items-center gap-2">
-                        <img
-                            src="{{ $logoUrl }}"
-                            alt="Logo da empresa"
-                            class="h-8 w-auto object-contain"
-                        >
-                    </a>
-                </div>
 
-                <!-- Navigation Links -->
-                <div class="hidden space-x-8 sm:-my-px sm:ms-10 sm:flex">
-                    <x-nav-link :href="route('admin.dashboard')" :active="request()->routeIs('admin.dashboard')">
-                        {{ __('Dashboard') }}
+            <!-- Left (Logo + Menu) -->
+            <div class="flex items-center">
+
+                <!-- Logo -->
+                <a href="{{ route('admin.dashboard') }}" class="flex items-center gap-2 shrink-0">
+                    <img src="{{ $logoUrl }}" alt="Logo" class="h-8 w-auto object-contain">
+                </a>
+
+                <!-- Menu Desktop -->
+                <div class="hidden sm:flex space-x-8 sm:ms-10">
+
+                    <x-nav-link 
+                        :href="route('admin.dashboard')"
+                        :active="request()->routeIs('admin.dashboard')"
+                        class="{{ $navText }} {{ $navHover }} font-medium">
+                        Dashboard
                     </x-nav-link>
 
                     @if(in_array($role, ['super_admin','diretor','gerente']))
-                        <x-nav-link :href="route('admin.empreendimentos.index')" :active="request()->routeIs('admin.empreendimentos.*')">
-                            {{ __('Empreendimentos') }}
+                        <x-nav-link 
+                            :href="route('admin.empreendimentos.index')"
+                            :active="request()->routeIs('admin.empreendimentos.*')"
+                            class="{{ $navText }} {{ $navHover }} font-medium">
+                            Empreendimentos
                         </x-nav-link>
                     @endif
+
                 </div>
             </div>
 
-            <!-- Settings Dropdown -->
-            <div class="hidden sm:flex sm:items-center sm:ml-6">
-                <x-dropdown align="right" width="48">
-                    <x-slot name="trigger">
-                        <button
-                            class="flex items-center text-sm font-medium text-gray-500 hover:text-gray-700 focus:outline-none transition"
-                        >
-                            <div class="mr-2">
-                                {{ Auth::user()->name }}
-                            </div>
-                            <div class="relative">
-                                <span
-                                    class="inline-flex items-center justify-center h-8 w-8 rounded-full bg-gray-200 text-gray-700 text-xs font-semibold"
-                                >
-                                    {{ \Illuminate\Support\Str::substr(Auth::user()->name, 0, 2) }}
-                                </span>
-                            </div>
-                        </button>
-                    </x-slot>
 
-                    <x-slot name="content">
-                        @if(auth()->check() && auth()->user()->role === 'diretor')
-                            <x-dropdown-link :href="route('admin.users.index')">
-                                Gestão de usuários
-                            </x-dropdown-link>
+           <!-- Right Side (User Dropdown) -->
+<div class="hidden sm:flex sm:items-center sm:ml-6">
 
-                            <x-dropdown-link :href="route('admin.company.edit')">
-                                Dados da empresa
-                            </x-dropdown-link>
-                        @endif
+    <x-dropdown align="right" width="48">
 
-                        <x-dropdown-link :href="route('profile.edit')">
-                            {{ __('Profile') }}
-                        </x-dropdown-link>
+        <!-- Trigger -->
+        <x-slot name="trigger">
+            <button class="flex items-center gap-2 {{ $navText }} {{ $navHover }} font-medium focus:outline-none">
 
-                        <form method="POST" action="{{ route('logout') }}">
-                            @csrf
-                            <x-dropdown-link
-                                href="{{ route('logout') }}"
-                                onclick="event.preventDefault(); this.closest('form').submit();">
-                                {{ __('Log Out') }}
-                            </x-dropdown-link>
-                        </form>
-                    </x-slot>
+                <span>{{ Auth::user()->name }}</span>
 
-                </x-dropdown>
+                <!-- Avatar ajustado conforme fundo da navbar -->
+                <span class="inline-flex items-center justify-center h-8 w-8 rounded-full 
+                    {{ $isDark ? 'bg-white text-gray-800' : 'bg-gray-800 text-white' }}">
+                    {{ Str::substr(Auth::user()->name, 0, 2) }}
+                </span>
+
+            </button>
+        </x-slot>
+
+        <!-- Dropdown (sempre branco) -->
+        <x-slot name="content">
+
+            <div class="bg-white p-2 rounded-md shadow-md">
+
+                @if(auth()->user()->role === 'diretor')
+                    <x-dropdown-link :href="route('admin.users.index')" class="text-gray-700">
+                        Gestão de usuários
+                    </x-dropdown-link>
+
+                    <x-dropdown-link :href="route('admin.company.edit')" class="text-gray-700">
+                        Dados da empresa
+                    </x-dropdown-link>
+                @endif
+
+                <x-dropdown-link :href="route('profile.edit')" class="text-gray-700">
+                    Perfil
+                </x-dropdown-link>
+
+                <!-- Logout -->
+                <form method="POST" action="{{ route('logout') }}">
+                    @csrf
+                    <x-dropdown-link 
+                        href="{{ route('logout') }}" 
+                        onclick="event.preventDefault(); this.closest('form').submit();"
+                        class="text-gray-700">
+                        Sair
+                    </x-dropdown-link>
+                </form>
             </div>
 
-            <!-- Hamburger -->
+        </x-slot>
+
+    </x-dropdown>
+</div>
+
+
+
+            <!-- Mobile Hamburger -->
             <div class="-me-2 flex items-center sm:hidden">
                 <button @click="open = ! open"
-                        class="inline-flex items-center justify-center p-2 rounded-md text-gray-400 hover:text-gray-500 hover:bg-gray-100 focus:outline-none focus:bg-gray-100 focus:text-gray-500 transition duration-150 ease-in-out">
+                    class="p-2 rounded-md {{ $navText }} {{ $navHover }} focus:outline-none transition">
                     <svg class="h-6 w-6" stroke="currentColor" fill="none" viewBox="0 0 24 24">
                         <path :class="{'hidden': open, 'inline-flex': ! open }"
                               class="inline-flex"
@@ -119,52 +148,58 @@
                     </svg>
                 </button>
             </div>
+
         </div>
     </div>
 
-    <!-- Responsive Navigation Menu -->
-    <div :class="{'block': open, 'hidden': ! open}" class="hidden sm:hidden">
+
+
+    <!-- Mobile Menu -->
+    <div :class="{'block': open, 'hidden': ! open}" class="hidden sm:hidden {{ $navText }} {{ $navHover }}">
+
         <div class="pt-2 pb-3 space-y-1">
-            <x-responsive-nav-link :href="route('admin.dashboard')" :active="request()->routeIs('admin.dashboard')">
-                {{ __('Dashboard') }}
+            <x-responsive-nav-link :href="route('admin.dashboard')" :active="request()->routeIs('admin.dashboard')" class="{{ $navText }}">
+                Dashboard
             </x-responsive-nav-link>
 
             @if(in_array($role, ['super_admin','diretor','gerente']))
-                <x-responsive-nav-link :href="route('admin.empreendimentos.index')" :active="request()->routeIs('admin.empreendimentos.*')">
-                    {{ __('Empreendimentos') }}
-                </x-responsive-nav-link>
-            @endif
-
-            @if(in_array($role, ['super_admin','diretor','gerente']))
-                <x-responsive-nav-link :href="route('admin.users.index')" :active="request()->routeIs('admin.users.*')">
-                    Gestão de usuários
+                <x-responsive-nav-link 
+                    :href="route('admin.empreendimentos.index')" 
+                    :active="request()->routeIs('admin.empreendimentos.*')"
+                    class="{{ $navText }}">
+                    Empreendimentos
                 </x-responsive-nav-link>
             @endif
         </div>
 
-        <!-- Responsive Settings Options -->
-        <div class="pt-4 pb-1 border-t border-gray-200">
+
+        <!-- Mobile User Info -->
+        <div class="pt-4 pb-1 border-t border-gray-300">
             <div class="px-4">
-                <div class="font-medium text-base text-gray-800">{{ Auth::user()->name }}</div>
-                <div class="font-medium text-sm text-gray-500">{{ Auth::user()->email }}</div>
+                <div class="font-medium text-base {{ $navText }}">{{ Auth::user()->name }}</div>
+                <div class="font-medium text-sm {{ $navTextSecondary }}">{{ Auth::user()->email }}</div>
             </div>
 
             <div class="mt-3 space-y-1">
-                <x-responsive-nav-link :href="route('profile.edit')">
-                    {{ __('Profile') }}
+
+                <x-responsive-nav-link :href="route('profile.edit')" class="{{ $navText }}">
+                    Perfil
                 </x-responsive-nav-link>
 
-                <!-- Authentication -->
+                <!-- Logout -->
                 <form method="POST" action="{{ route('logout') }}">
                     @csrf
-
-                    <x-responsive-nav-link :href="route('logout')"
-                        onclick="event.preventDefault();
-                                 this.closest('form').submit();">
-                        {{ __('Log Out') }}
+                    <x-responsive-nav-link 
+                        href="{{ route('logout') }}"
+                        onclick="event.preventDefault(); this.closest('form').submit();"
+                        class="{{ $navText }}">
+                        Sair
                     </x-responsive-nav-link>
                 </form>
+
             </div>
         </div>
+
     </div>
+
 </nav>

@@ -1,6 +1,29 @@
+<style>
+
+   .logo-cliente {
+    width: 100%;
+    text-align: center;
+    display: flex;
+    position: relative;
+    flex-wrap: nowrap;
+    align-content: center;
+    justify-content: center;
+    align-items: center;
+    padding: 32px;
+}
+    </style>
+
+
 <x-guest-layout>
     <!-- Session Status -->
     <x-auth-session-status class="mb-4" :status="session('status')" />
+
+
+    <div class="logo-cliente">
+<img src="https://mzninc.com.br/wp-content/uploads/2023/05/logo-mzn.png"style="
+    width: 50%;
+">
+</div>
 
     <form method="POST" action="{{ route('login') }}">
         @csrf

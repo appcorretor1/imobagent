@@ -25,6 +25,8 @@ use App\Models\EmpreendimentoUnidade;
 
 class WppController extends Controller
 {
+
+    
     /** TTL do mapa de empreendimentos (minutos) */
     protected int $empMapTtlMinutes = 15;
     /** Timeout de inatividade (horas) */
@@ -2137,6 +2139,8 @@ PROMPT;
         $hook = env('MAKE_WEBHOOK_URL');
         if ($hook) {
             $payload = [
+                  "company_id" => $companyId, // ← ADICIONE ESTA LINHA
+    "empreendimento_id" => $empId, // opcional
                 'phone'    => preg_replace('/\D+/', '', $phone),
                 'url'      => $publicUrl,
                 'fileUrl'  => $publicUrl,
