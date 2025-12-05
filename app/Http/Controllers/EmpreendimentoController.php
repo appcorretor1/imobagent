@@ -11,6 +11,9 @@ use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Facades\Log;
 use Intervention\Image\Laravel\Facades\Image;
 use Illuminate\Http\UploadedFile;
+use App\Services\GoogleSheetsImporter;
+use App\Models\Unidade;
+
 
 
 
@@ -154,13 +157,22 @@ if ($request->hasFile('logo_path')) {
      */
 public function edit(Empreendimento $e)
 {
-    $companyId = auth()->user()->company_id ?? 1;
+    // Garante que as unidades venham carregadas
+    $e->loadMissing('unidades');
+
+    // Filtra incorporadoras pela empresa logada
+    $companyId = auth()->user()->company_id ?? null;
+
     $incorporadoras = Incorporadora::where('company_id', $companyId)
         ->orderBy('nome')
         ->get();
 
-    return view('admin.empreendimentos.edit', compact('e', 'incorporadoras'));
+    return view('admin.empreendimentos.edit', [
+        'e' => $e,
+        'incorporadoras' => $incorporadoras,
+    ]);
 }
+
 public function update(Request $request, Empreendimento $e)
 {
     $data = $request->validate([
@@ -180,6 +192,8 @@ public function update(Request $request, Empreendimento $e)
         'descricao'            => ['nullable', 'string'],
         'disponibilidade_texto'=> ['nullable', 'string'],
         'pdf_url'              => ['nullable', 'string', 'max:255'],
+                'google_sheet_id' => 'nullable|string|max:255', // 👈 aqui
+
         'contexto_ia'          => ['nullable', 'string'],
         'texto_ia'             => ['nullable', 'string'],
 
@@ -393,6 +407,76 @@ protected function processAndStoreImage(UploadedFile $file, string $path, string
     return $fullPath;
 }
 
+//consumir excel gogole docs
+public function importarUnidadesGoogleSheet(Empreendimento $empreendimento, GoogleSheetsImporter $sheets)
+{
+    // 1) Verifica se tem ID de planilha
+    if (!$empreendimento->google_sheet_id) {
+        return back()->with('error', 'Nenhuma planilha integrada para este empreendimento. Preencha o ID da planilha e salve antes de importar.');
+    }
 
+    try {
+        // 2) Busca dados do Google Sheets
+        $rows = $sheets->getData($empreendimento->google_sheet_id, 'A:D');
 
+        if (empty($rows) || count($rows) <= 1) {
+            return back()->with('error', 'A planilha não possui dados (ou só tem o cabeçalho).');
+        }
+
+        $totalImportadas = 0;
+
+        foreach ($rows as $index => $row) {
+            // pula header
+            if ($index === 0) {
+                continue;
+            }
+
+            if (!isset($row[1])) {
+                continue;
+            }
+
+            $unidadeNumero = trim($row[1]);
+
+            if ($unidadeNumero === '') {
+                continue;
+            }
+
+            $torre       = $row[2] ?? null;
+            $statusBruto = $row[3] ?? null;
+
+            $statusNormalizado = $statusBruto
+                ? strtolower(trim($statusBruto))
+                : null;
+
+            Unidade::updateOrCreate(
+                [
+                    'empreendimento_id' => $empreendimento->id,
+                    'unidade' => $unidadeNumero,
+                ],
+                [
+                    'torre' => $torre,
+                    'status' => $statusNormalizado,
+                    'updated_at_google' => now(),
+                ]
+            );
+
+            $totalImportadas++;
+        }
+
+        if ($totalImportadas === 0) {
+            return back()->with('error', 'Nenhuma unidade válida encontrada na planilha.');
+        }
+
+        return back()->with('ok', "Unidades sincronizadas com sucesso ({$totalImportadas} registros).");
+
+    } catch (\Throwable $e) {
+        Log::error('Erro ao importar planilha do empreendimento', [
+            'empreendimento_id' => $empreendimento->id,
+            'sheet_id' => $empreendimento->google_sheet_id,
+            'exception' => $e->getMessage(),
+        ]);
+
+        return back()->with('error', 'Erro ao acessar a planilha. Verifique se o ID está correto e se a planilha permite acesso à service account.');
+    }
+}
 }

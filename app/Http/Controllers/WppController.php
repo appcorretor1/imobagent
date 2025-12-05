@@ -3629,17 +3629,19 @@ protected function handleUnidadesStatusComando(int $empreendimentoId, string $ms
     // 1) Descobrir QUAL status o corretor quer aplicar
     $statusTarget = null;
 
-    // ➤ Reservado
-    if (Str::contains($txt, [
-        'reservar',
-        'reserva ',
-        'bloquear',
-        'bloqueia',
-        'segurar',
-        'segura ',
-    ])) {
-        $statusTarget = EmpreendimentoUnidade::STATUS_RESERVADO;
-    }
+   // ➤ Reservado
+if (Str::contains($txt, [
+    'reservar',
+    'reserva ',
+    'reservado',      // ← novo
+    'reservada',      // ← novo
+    'bloquear',
+    'bloqueia',
+    'segurar',
+    'segura ',
+])) {
+    $statusTarget = EmpreendimentoUnidade::STATUS_RESERVADO;
+}
 
     // ➤ Fechado / vendido
     if ($statusTarget === null && Str::contains($txt, [
@@ -3709,14 +3711,15 @@ protected function handleUnidadesStatusComando(int $empreendimentoId, string $ms
         return "Não entendi qual unidade você quer atualizar. Me manda algo como: *reservar unidade 102 da torre 1*.";
     }
 
-    // 3) Descobrir torre/bloco/grupo, se veio na frase
-    // exemplos capturados:
-    // - "torre 1", "torre1"
-    // - "bloco a", "quadra b", "ala 2", "alameda azul"
-    $grupoBusca = null;
-    if (preg_match('/(torre|bloco|quadra|ala|alameda)\s+([a-z0-9]+)/u', $txt, $mg)) {
-        $grupoBusca = trim($mg[1] . ' ' . $mg[2]); // "torre 1", "bloco a"
-    }
+   // 3) Descobrir torre/bloco/grupo, se veio na frase
+// exemplos capturados:
+// - "torre 1", "torre1"
+// - "bloco a", "quadra b", "ala 2", "alameda azul"
+$grupoBusca = null;
+if (preg_match('/(torre|bloco|quadra|ala|alameda|grupo|setor|modulo)\s+([a-z0-9]+)/u', $txt, $mg)) {
+    $grupoBusca = trim($mg[1] . ' ' . $mg[2]); // "torre 1", "bloco a", "grupo 2"
+}
+
 
     // 4) Buscar unidade(s) no banco
     $query = EmpreendimentoUnidade::where('empreendimento_id', $empreendimentoId)

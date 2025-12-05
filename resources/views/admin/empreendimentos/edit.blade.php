@@ -5,6 +5,20 @@
 
     <div class="max-w-7xl mx-auto p-6">
 
+    @if (session('ok'))
+        <div class="mb-4 rounded border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm text-emerald-800">
+            {{ session('ok') }}
+        </div>
+    @endif
+
+    @if (session('error'))
+        <div class="mb-4 rounded border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-800">
+            {{ session('error') }}
+        </div>
+    @endif
+
+    <div class="max-w-7xl mx-auto p-6">
+
         <form action="{{ route('admin.empreendimentos.update', $e->id) }}"
               method="POST"
               enctype="multipart/form-data"
@@ -64,7 +78,7 @@
 
             </div>
 
-            {{-- PRECO --}}
+            {{-- PREÇO --}}
             <div>
                 <label class="block text-sm font-medium">Preço base</label>
                 <input type="text" name="preco_base"
@@ -117,8 +131,10 @@
 
             </div>
 
+           
+
             {{-- DESCRIÇÃO --}}
-            <div>
+            <div class="mt-4">
                 <label class="block text-sm font-medium mb-1">Descrição</label>
                 <textarea name="descricao" rows="4"
                           class="w-full rounded border-gray-300">{{ old('descricao', $e->descricao) }}</textarea>
@@ -183,6 +199,10 @@
             </div>
 
         </form>
+
+       
+
+      
 
     </div>
 </x-app-layout>

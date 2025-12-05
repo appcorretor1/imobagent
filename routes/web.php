@@ -128,6 +128,12 @@ Route::middleware(['auth', 'verified', 'tenant'])
             ->name('empreendimentos.texto.update')
             ->whereNumber('e');
 
+          Route::post('empreendimentos/{empreendimento}/importar-planilha', [
+    EmpreendimentoController::class,
+    'importarUnidadesGoogleSheet'
+])->name('empreendimentos.importar-planilha');
+
+
         /*
         |--------------------------------------------------------------------------
         | Knowledge Assets (arquivos do empreendimento)
@@ -155,6 +161,9 @@ Route::middleware(['auth', 'verified', 'tenant'])
             ->name('assets.destroy')
             ->whereNumber('e')
             ->whereNumber('asset');
+
+          
+
 
         /*
         |--------------------------------------------------------------------------

@@ -5,6 +5,8 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\Schema;
 use App\Http\Controllers\Log;
+use App\Models\Unidade;
+
 
 class Empreendimento extends Model
 {
@@ -30,6 +32,7 @@ class Empreendimento extends Model
     'disponibilidade_texto',
     'pdf_url',
     'contexto_ia',
+    'google_sheet_id',
     'texto_ia',
     'ativo'
 ];
@@ -60,10 +63,14 @@ class Empreendimento extends Model
     return $this->belongsTo(Incorporadora::class);
 }
 
+
 public function unidades()
 {
     return $this->hasMany(\App\Models\EmpreendimentoUnidade::class);
 }
+
+
+
 
 public function assets()
 {
