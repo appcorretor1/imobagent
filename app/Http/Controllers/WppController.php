@@ -826,16 +826,45 @@ protected function userCanAlterUnidades(?User $user): bool
 
     // ===== Intents =====
 
-    protected function isChangeEmpreendimento(string $norm): bool
-    {
-        $aliases = [
-            'mudar empreendimento','trocar empreendimento','alterar empreendimento',
-            'mudar imovel','trocar imovel','alterar imovel',
-            'mudar','trocar empreendimento por outro','trocar por outro empreendimento',
-        ];
-        foreach ($aliases as $a) if (Str::contains($norm, $a)) return true;
+  protected function isChangeEmpreendimento(string $norm): bool
+{
+    $norm = trim(mb_strtolower($norm));
+
+    // 👇 Se a frase fala de status/unidade, NÃO é troca de empreendimento
+    if (Str::contains($norm, [
+        'status',
+        'unidade',
+        'apto',
+        'apartamento',
+        'lote',
+        'casa',
+        'torre',
+        'bloco',
+        'quadra',
+    ])) {
         return false;
     }
+
+    $aliases = [
+        'mudar empreendimento',
+        'trocar empreendimento',
+        'alterar empreendimento',
+        'mudar imovel',
+        'trocar imovel',
+        'alterar imovel',
+        'trocar empreendimento por outro',
+        'trocar por outro empreendimento',
+        // 👈 aqui não tem mais 'mudar' sozinho
+    ];
+
+    foreach ($aliases as $a) {
+        if (Str::contains($norm, $a)) {
+            return true;
+        }
+    }
+
+    return false;
+}
 
     protected function extractIndexNumber(string $norm): ?string
     {
@@ -3629,12 +3658,13 @@ protected function handleUnidadesStatusComando(int $empreendimentoId, string $ms
     // 1) Descobrir QUAL status o corretor quer aplicar
     $statusTarget = null;
 
-   // ➤ Reservado
+  // ➤ Reservado
 if (Str::contains($txt, [
     'reservar',
     'reserva ',
     'reservado',      // ← novo
     'reservada',      // ← novo
+    'deixar reservado', // se quiser reforçar
     'bloquear',
     'bloqueia',
     'segurar',
@@ -3642,6 +3672,7 @@ if (Str::contains($txt, [
 ])) {
     $statusTarget = EmpreendimentoUnidade::STATUS_RESERVADO;
 }
+
 
     // ➤ Fechado / vendido
     if ($statusTarget === null && Str::contains($txt, [
