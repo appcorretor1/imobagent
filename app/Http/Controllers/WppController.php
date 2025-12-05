@@ -743,8 +743,8 @@ protected function userCanAlterUnidades(?User $user): bool
         return false;
     }
 
-    // Considerando coluna 'role' na tabela users
-    $role = strtoupper((string) ($user->role ?? ''));
+    // normaliza para minúsculo, já que no banco está "diretor", "corretor"
+    $role = strtolower((string) ($user->role ?? ''));
 
     return $role === 'diretor';
 }
