@@ -22,6 +22,8 @@ use OpenAI;
 use App\Models\User;
 use PhpOffice\PhpSpreadsheet\IOFactory;
 use App\Models\EmpreendimentoUnidade;
+use App\Models\EmpreendimentoMidia;
+
 
 class WppController extends Controller
 {
@@ -47,18 +49,53 @@ class WppController extends Controller
             return response()->json(['ok' => false, 'error' => 'missing phone'], 422);
         }
 
-        /**
-         * 🔹 IMPORTANTE: ignorar mensagens SEM TEXTO
-         * Isso evita responder webhooks internos da Z-API (status, confirmação, etc.).
-         */
-        if ($text === '') {
-            Log::info('WPP inbound texto vazio, ignorando', [
-                'phone'   => $phone,
-                'payload' => array_keys($p),
-            ]);
+      // Detecta se veio alguma mídia no payload
+$hasMedia = false;
 
-            return response()->noContent();
-        }
+// Z-API costuma mandar fileUrl quando é mídia/arquivo
+if (!empty($p['fileUrl'])) {
+    $hasMedia = true;
+}
+
+// Algumas instâncias mandam um array "medias"
+if (isset($p['medias']) && is_array($p['medias']) && count($p['medias']) > 0) {
+    $hasMedia = true;
+}
+
+// Campos genéricos que também podem indicar mídia
+if (!empty($p['image']) || !empty($p['video']) || !empty($p['document'])) {
+    $hasMedia = true;
+}
+
+// Detecta se veio alguma mídia no payload da Z-API
+$hasMedia = false;
+
+if (!empty($p['fileUrl'])) {
+    $hasMedia = true;
+}
+
+if (isset($p['medias']) && is_array($p['medias']) && count($p['medias']) > 0) {
+    $hasMedia = true;
+}
+
+if (!empty($p['image']) || !empty($p['video']) || !empty($p['document'])) {
+    $hasMedia = true;
+}
+
+/**
+ * 🔹 IMPORTANTE: ignorar mensagens SEM TEXTO E SEM MÍDIA
+ * Isso evita responder webhooks internos da Z-API (status, confirmação, etc.).
+ */
+if ($text === '' && !$hasMedia) {
+    Log::info('WPP inbound texto vazio e sem mídia, ignorando', [
+        'phone'   => $phone,
+        'payload' => array_keys($p),
+    ]);
+
+    return response()->noContent();
+}
+
+
 
         /**
          * 🔒 HARD-GATE: só continua se o número existir na tabela users
@@ -102,6 +139,50 @@ class WppController extends Controller
         Cache::put($dedupKey, 1, now()->addSeconds(15));
         // ================== FIM DEDUP ==================
 
+        // --------------------------------------------------------------------
+// Comando global: criar empreendimento / criar revenda
+// Pode ser chamado a qualquer momento da conversa
+// --------------------------------------------------------------------
+if (str_contains($norm, 'criar empreendimento') || str_contains($norm, 'criar revenda')) {
+
+    // vamos garantir que o thread exista primeiro
+    $thread = WhatsappThread::firstOrCreate(
+        ['phone' => $phone],
+        [
+            'thread_id' => 'thread_' . Str::random(24),
+            'selected_empreendimento_id' => null,
+            'empreendimento_id'          => null,
+            'state' => 'awaiting_emp_choice',
+        ]
+    );
+
+    // se ainda não tiver corretor vinculado, tenta vincular
+    $this->attachCorretorToThread($thread, $phone);
+
+    if (empty($thread->corretor_id)) {
+        $this->sendText(
+            $phone,
+            "⚠️ Não consegui identificar seu usuário corretor na plataforma.\n" .
+            "Verifique se seu número está cadastrado corretamente e tente novamente."
+        );
+
+        return response()->json(['ok' => true, 'handled' => 'criar_empreendimento_sem_corretor']);
+    }
+
+    // coloca o thread em estado de criação de revenda
+    $thread->state = 'creating_revenda_nome';
+    $thread->save();
+
+    $this->sendText(
+        $phone,
+        "✨ Vamos criar um novo empreendimento de revenda só seu.\n\n" .
+        "Me envie agora *o nome* desse novo empreendimento."
+    );
+
+    return response()->json(['ok' => true, 'handled' => 'criar_empreendimento_start']);
+}
+
+
         $thread = WhatsappThread::firstOrCreate(
             ['phone' => $phone],
             [
@@ -111,6 +192,33 @@ class WppController extends Controller
                 'state' => 'awaiting_emp_choice',
             ]
         );
+
+       // Comando: criar empreendimento / criar revenda (sempre disponível)
+if (str_contains($norm, 'criar empreendimento') || str_contains($norm, 'criar revenda')) {
+
+    // garante que o corretor está vinculado ao thread
+    $this->attachCorretorToThread($thread, $phone);
+
+    if (empty($thread->corretor_id)) {
+        $this->sendText(
+            $phone,
+            "⚠️ Não consegui identificar seu usuário corretor. Verifique se seu número está cadastrado corretamente na plataforma."
+        );
+        return response()->json(['ok' => true, 'handled' => 'criar_empreendimento_sem_corretor']);
+    }
+
+    $thread->state = 'creating_revenda_nome';
+    $thread->save();
+
+    $this->sendText(
+        $phone,
+        "✨ Vamos criar um novo empreendimento de revenda só seu.\n\n" .
+        "Me envie agora *o nome* desse novo empreendimento."
+    );
+
+    return response()->json(['ok' => true, 'handled' => 'criar_empreendimento_start']);
+}
+
 
         /**
          * ⏰ TIMEOUT DE INATIVIDADE (8 HORAS)
@@ -179,22 +287,92 @@ class WppController extends Controller
         }
 
         // 🔹 tenta vincular corretor e, se existir, company_id também
-        $this->attachCorretorToThread($thread, $phone);
+$this->attachCorretorToThread($thread, $phone);
 
-        // 🔹 Registra a mensagem recebida do usuário/corretor
-        if ($text !== '') {
-            $this->storeMessage($thread, [
-                'sender' => 'user',
-                'type'   => 'text',
-                'body'   => $text,
-                'meta'   => [
-                    'provider_msg_id' => $providerMsgId ?: null,
-                    'raw_payload'     => $p,
-                ],
-            ]);
+// ================== GALERIA: salvar mídias do corretor no empreendimento ==================
+if (isset($hasMedia) && $hasMedia && !empty($thread->selected_empreendimento_id) && !empty($thread->corretor_id)) {
+    try {
+        $empId      = (int) $thread->selected_empreendimento_id;
+        $corretorId = (int) $thread->corretor_id;
+
+        $urls = [];
+
+        if (!empty($p['fileUrl'])) {
+            $urls[] = $this->scalarize($p['fileUrl']);
         }
 
-        $ctx = $thread->context ?? [];
+        if (isset($p['medias']) && is_array($p['medias'])) {
+            foreach ($p['medias'] as $media) {
+                $u = $this->scalarize($media['fileUrl'] ?? '');
+                if ($u !== '') {
+                    $urls[] = $u;
+                }
+            }
+        }
+
+        if (!empty($p['image'])) {
+            $urls[] = $this->scalarize($p['image']);
+        }
+        if (!empty($p['video'])) {
+            $urls[] = $this->scalarize($p['video']);
+        }
+        if (!empty($p['document'])) {
+            $urls[] = $this->scalarize($p['document']);
+        }
+
+        if (empty($urls)) {
+            Log::warning('WPP galeria: hasMedia=true mas sem URLs utilizáveis', [
+                'phone'   => $phone,
+                'payload' => array_keys($p),
+            ]);
+        } else {
+            $saved = [];
+
+            foreach ($urls as $url) {
+                $saved[] = $this->saveEmpreendimentoMediaFromUrl($url, $empId, $corretorId);
+            }
+
+            $pasta       = "midias/empreendimentos/{$empId}/corretores/{$corretorId}/";
+            $linkGaleria = rtrim(Storage::disk('s3')->url($pasta), '/');
+
+            $this->sendText(
+                $phone,
+                "✅ Salvei *" . count($saved) . "* arquivo(s) na sua galeria desse empreendimento.\n\n" .
+                "🔗 Link da sua galeria:\n{$linkGaleria}"
+            );
+        }
+    } catch (\Throwable $e) {
+        Log::error('WPP galeria: erro ao salvar mídia', [
+            'phone' => $phone,
+            'err'   => $e->getMessage(),
+        ]);
+
+        $this->sendText(
+            $phone,
+            "⚠️ Não consegui salvar essas mídias agora. Tente novamente em alguns minutos."
+        );
+    }
+
+    // não registra essa mensagem como texto e não continua pro fluxo de IA
+    return response()->json(['ok' => true, 'handled' => 'galeria_midias']);
+}
+// ================== FIM GALERIA ==================
+
+// 🔹 Registra a mensagem recebida do usuário/corretor (apenas texto)
+if ($text !== '') {
+    $this->storeMessage($thread, [
+        'sender' => 'user',
+        'type'   => 'text',
+        'body'   => $text,
+        'meta'   => [
+            'provider_msg_id' => $providerMsgId ?: null,
+            'raw_payload'     => $p,
+        ],
+    ]);
+}
+
+$ctx = $thread->context ?? [];
+
 
         Log::info('WPP inbound start', [
             'phone'  => $phone,
@@ -681,6 +859,56 @@ if (!empty($thread->selected_empreendimento_id) && $this->isMultiIndexList($text
             return $this->sendEmpreendimentosList($thread);
         }
 
+        // --------------------------------------------------------------------
+// Estado: aguardando nome da revenda (creating_revenda_nome)
+// --------------------------------------------------------------------
+if ($thread->state === 'creating_revenda_nome') {
+
+    if (trim($text) === '') {
+        $this->sendText(
+            $phone,
+            "Por favor, me envie o *nome* do novo empreendimento que você quer criar."
+        );
+
+        return response()->json(['ok' => true, 'handled' => 'criar_empreendimento_nome_vazio']);
+    }
+
+    $nome       = trim($text);
+    $corretorId = (int) $thread->corretor_id;
+    $companyId  = $thread->company_id ?? null;
+
+    $emp = new Empreendimento();
+    $emp->nome             = $nome;
+    $emp->is_revenda       = 1;
+    $emp->dono_corretor_id = $corretorId;
+
+    // se sua tabela tiver company_id e status, preenche
+    if (Schema::hasColumn($emp->getTable(), 'company_id')) {
+        $emp->company_id = $companyId;
+    }
+    if (Schema::hasColumn($emp->getTable(), 'status')) {
+        $emp->status = 'rascunho';
+    }
+
+    $emp->save();
+
+    // vincula esse empreendimento ao thread
+    $thread->selected_empreendimento_id = $emp->id;
+    $thread->state                      = 'idle';
+    $thread->save();
+
+    $this->sendText(
+        $phone,
+        "✅ Empreendimento de revenda criado com sucesso!\n\n" .
+        "🏢 *{$emp->nome}*\n" .
+        "ID interno: {$emp->id}\n\n" .
+        "Agora você pode enviar *fotos e vídeos* desse empreendimento aqui mesmo " .
+        "que eu vou salvar tudo na sua galeria exclusiva dele. 😉"
+    );
+
+    return response()->json(['ok' => true, 'handled' => 'criar_empreendimento_nome_ok']);
+}
+
         // Estado: aguardando escolha → tentar capturar índice
         if ($thread->state === 'awaiting_emp_choice') {
             if ($idx = $this->extractIndexNumber($norm)) {
@@ -984,7 +1212,7 @@ protected function userCanAlterUnidades(?User $user): bool
 
     protected function footerControls(): string
     {
-        return "\n\nDigite *mudar empreendimento* para voltar à lista.\n";
+        return "\n\nDigite *mudar empreendimento* para voltar à lista, ou *menu* para ver opções.\n";
     }
 
     protected function resolveCompanyIdForThread(WhatsappThread $thread): ?int
@@ -1302,6 +1530,55 @@ $pdfPath = $this->buildAndStoreProposalPdf(
             );
         }
     }
+
+    // --------------------------------------------------------------------
+// Estado: aguardando nome da revenda
+// --------------------------------------------------------------------
+if ($thread->state === 'creating_revenda_nome') {
+
+    // se não mandou texto, pede de novo
+    if (trim($text) === '') {
+        $this->sendText($phone, "Por favor, me envie o *nome* do novo empreendimento que você quer criar.");
+        return response()->json(['ok' => true, 'handled' => 'criar_empreendimento_nome_vazio']);
+    }
+
+    $nome = trim($text);
+    $corretorId = (int) $thread->corretor_id;
+    $companyId  = $thread->company_id ?? null; // se você tiver esse campo no thread
+
+    // cria o empreendimento de revenda
+    $emp = new Empreendimento();
+    $emp->nome             = $nome;
+    $emp->is_revenda       = 1;
+    $emp->dono_corretor_id = $corretorId;
+
+    // campos opcionais, se existirem na sua tabela:
+    if (property_exists($emp, 'company_id') || \Schema::hasColumn($emp->getTable(), 'company_id')) {
+        $emp->company_id = $companyId;
+    }
+    if (\Schema::hasColumn($emp->getTable(), 'status')) {
+        $emp->status = 'rascunho';
+    }
+
+    $emp->save();
+
+    // vincula esse empreendimento ao thread
+    $thread->selected_empreendimento_id = $emp->id;
+    $thread->state = 'idle'; // volta pro fluxo normal
+    $thread->save();
+
+    $this->sendText(
+        $phone,
+        "✅ Empreendimento de revenda criado com sucesso!\n\n" .
+        "🏢 *{$emp->nome}*\n" .
+        "ID interno: {$emp->id}\n\n" .
+        "Agora você pode enviar *fotos e vídeos* desse empreendimento aqui mesmo, " .
+        "que eu vou salvar tudo na sua galeria exclusiva dele. 😉"
+    );
+
+    return response()->json(['ok' => true, 'handled' => 'criar_empreendimento_nome_ok']);
+}
+
 
     /**
      * 🧮 SUPER-GATE: perguntas de pagamento / tabela (Excel)
@@ -4194,7 +4471,72 @@ protected function handleEmpreendimentoAssetChoice($thread, string $text, string
     // Se cair aqui, número inválido
     $this->sendWhatsAppText($phone, "Opção inválida. Me manda o número do arquivo que você quer abrir.");
 }
+/**
+ * Baixa uma mídia da Z-API e salva no S3,
+ * registrando na tabela empreendimento_midias.
+ */
+private function saveEmpreendimentoMediaFromUrl(string $url, int $empreendimentoId, int $corretorId): string
+{
+    Log::info('WPP galeria: baixando mídia da Z-API', [
+        'url'            => $url,
+        'empreendimento' => $empreendimentoId,
+        'corretor'       => $corretorId,
+    ]);
 
+    $resp = Http::timeout(40)->get($url);
+
+    if (!$resp->successful()) {
+        throw new \RuntimeException('Falha ao baixar mídia da Z-API: HTTP ' . $resp->status());
+    }
+
+    $binary = $resp->body();
+    $mime   = $resp->header('Content-Type', 'application/octet-stream');
+
+    $pathFromUrl = parse_url($url, PHP_URL_PATH) ?? '';
+    $ext         = pathinfo($pathFromUrl, PATHINFO_EXTENSION);
+
+    if ($ext === '' || strlen($ext) > 5) {
+        if (str_starts_with($mime, 'image/')) {
+            $ext = 'jpg';
+        } elseif (str_starts_with($mime, 'video/')) {
+            $ext = 'mp4';
+        } else {
+            $ext = 'bin';
+        }
+    }
+
+    if (str_starts_with($mime, 'image/')) {
+        $tipo = 'foto';
+    } elseif (str_starts_with($mime, 'video/')) {
+        $tipo = 'video';
+    } else {
+        $tipo = 'outro';
+    }
+
+    $fileName = 'wpp_' . now()->format('Ymd_His') . '_' . uniqid() . '.' . $ext;
+    $pasta    = "midias/empreendimentos/{$empreendimentoId}/corretores/{$corretorId}/";
+    $path     = $pasta . $fileName;
+
+    Storage::disk('s3')->put($path, $binary);
+
+    EmpreendimentoMidia::create([
+        'empreendimento_id' => $empreendimentoId,
+        'corretor_id'       => $corretorId,
+        'arquivo_path'      => $path,
+        'arquivo_tipo'      => $tipo,
+    ]);
+
+    $urlPublica = Storage::disk('s3')->url($path);
+
+    Log::info('WPP galeria: mídia salva com sucesso', [
+        'path'       => $path,
+        'urlPublica' => $urlPublica,
+        'mime'       => $mime,
+        'tipo'       => $tipo,
+    ]);
+
+    return $urlPublica;
+}
 
 
 }

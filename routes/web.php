@@ -1,5 +1,6 @@
 <?php
 
+use Illuminate\Support\Facades\Auth;
 use App\Http\Controllers\WhatsappWebhookController;
 use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\Api\UserCheckController;
@@ -10,7 +11,8 @@ use App\Http\Controllers\Admin\UserController as AdminUserController;
 use App\Http\Controllers\EmpreendimentoUnidadeController;
 use App\Http\Controllers\CompanySettingsController;
 use App\Http\Controllers\EmpreendimentoFotoController;
-
+use App\Http\Controllers\MidiaController;
+use App\Models\EmpreendimentoMidia;
 
 use App\Http\Controllers\{
     ProfileController,
@@ -299,5 +301,57 @@ Route::get('/debug/vs/{empreendimento}', function (\App\Models\Empreendimento $e
         'files' => $rows,
     ]);
 })->middleware('auth');
+
+
+/* ASSESSOR DO CORRETOR ------*
+corretor enviar midia sobre um empreendimento */
+
+Route::middleware(['auth'])->group(function () {
+
+    Route::get('/dashboard/meus-empreendimentos', function () {
+        $corretorId = Auth::id();
+
+        $galerias = EmpreendimentoMidia::with('empreendimento')
+            ->where('corretor_id', $corretorId)
+            ->select('empreendimento_id')
+            ->distinct()
+            ->get();
+
+        return view('dashboard.meus-empreendimentos', compact('galerias'));
+    })->name('dashboard.meus-empreendimentos');
+
+    Route::get('/dashboard/meus-empreendimentos/{empreendimentoId}', function (int $empreendimentoId) {
+        $corretorId = Auth::id();
+
+        $midias = EmpreendimentoMidia::with('empreendimento')
+            ->where('corretor_id', $corretorId)
+            ->where('empreendimento_id', $empreendimentoId)
+            ->orderByDesc('created_at')
+            ->get();
+
+        $arquivos = $midias->map(function ($m) {
+            return [
+                'tipo' => $m->arquivo_tipo,
+                'url'  => Storage::disk('s3')->url($m->arquivo_path),
+                'data' => $m->created_at,
+            ];
+        });
+
+        $pasta      = "midias/empreendimentos/{$empreendimentoId}/corretores/{$corretorId}/";
+        $linkGaleria = rtrim(Storage::disk('s3')->url($pasta), '/');
+
+        return view('dashboard.meus-empreendimentos-show', [
+            'empreendimentoId' => $empreendimentoId,
+            'midias'           => $midias,
+            'arquivos'         => $arquivos,
+            'linkGaleria'      => $linkGaleria,
+        ]);
+    })->name('dashboard.meus-empreendimentos.show');
+});
+
+
+Route::post('/midias/upload', [MidiaController::class, 'store']);
+Route::get('/midias/empreendimento/{empreendimentoId}', [MidiaController::class, 'listarPorEmpreendimento']);
+
 
 require __DIR__ . '/auth.php';

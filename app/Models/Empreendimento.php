@@ -34,7 +34,9 @@ class Empreendimento extends Model
     'contexto_ia',
     'google_sheet_id',
     'texto_ia',
-    'ativo'
+    'ativo',
+    'is_revenda',
+    'dono_corretor_id',
 ];
 
     protected $casts = [
@@ -77,6 +79,21 @@ public function assets()
     return $this->hasMany(Asset::class);
 }
 
+ public function donoCorretor()
+    {
+        return $this->belongsTo(User::class, 'dono_corretor_id');
+    }
+
+    public function scopeRevendasDoCorretor($query, int $corretorId)
+    {
+        return $query->where('is_revenda', 1)
+                     ->where('dono_corretor_id', $corretorId);
+    }
+
+    public function scopeOficiais($query)
+    {
+        return $query->where('is_revenda', 0);
+    }
 
 
 }

@@ -62,6 +62,15 @@
                         </x-nav-link>
                     @endif
 
+                   <x-nav-link 
+    :href="route('dashboard.meus-empreendimentos')"
+    :active="request()->routeIs('dashboard.meus-empreendimentos*')"
+>
+    Meus empreendimentos
+</x-nav-link>
+
+
+
                 </div>
             </div>
 
