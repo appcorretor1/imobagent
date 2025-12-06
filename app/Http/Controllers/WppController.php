@@ -905,7 +905,6 @@ if ($thread->state === 'creating_revenda_nome') {
         $phone,
         "✅ Empreendimento de revenda criado com sucesso!\n\n" .
         "🏢 *{$emp->nome}*\n" .
-        "ID interno: {$emp->id}\n\n" .
         "Agora você pode enviar *fotos e vídeos* desse empreendimento aqui mesmo " .
         "que eu vou salvar tudo na sua galeria exclusiva dele. 😉"
     );

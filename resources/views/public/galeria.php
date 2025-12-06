@@ -1,149 +1,174 @@
-<!DOCTYPE html>
+{{-- resources/views/public/galeria.blade.php --}}
+<!doctype html>
 <html lang="pt-BR">
 <head>
-    <meta charset="UTF-8">
+    <meta charset="utf-8">
     <title>
-        Galeria -
         @if($empreendimento && $empreendimento->nome)
             {{ $empreendimento->nome }}
         @else
             Empreendimento #{{ $empreendimentoId }}
         @endif
+        – Galeria
     </title>
+
     <meta name="viewport" content="width=device-width, initial-scale=1">
 
+    {{-- CSS bem simples só pra ficar apresentável --}}
     <style>
         body {
             font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
             background: #f3f4f6;
+            color: #111827;
             margin: 0;
             padding: 0;
-            color: #111827;
         }
+
         .page {
-            max-width: 1000px;
+            max-width: 960px;
             margin: 0 auto;
-            padding: 24px 16px 40px;
+            padding: 1.5rem;
         }
+
         .card {
             background: #ffffff;
-            border-radius: 16px;
-            box-shadow: 0 10px 30px rgba(15, 23, 42, 0.08);
-            padding: 20px;
+            border-radius: 12px;
+            padding: 1.5rem;
+            box-shadow: 0 10px 25px rgba(15, 23, 42, 0.08);
         }
-        .header {
-            margin-bottom: 16px;
+
+        h1 {
+            font-size: 1.5rem;
+            margin: 0 0 0.25rem 0;
         }
-        .title {
-            font-size: 20px;
-            font-weight: 600;
-            margin: 0 0 4px;
-        }
+
         .subtitle {
-            font-size: 13px;
+            font-size: 0.95rem;
             color: #6b7280;
+            margin-bottom: 1.5rem;
         }
+
         .grid {
             display: grid;
-            grid-template-columns: repeat(2, minmax(0, 1fr));
-            gap: 12px;
+            grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+            gap: 1rem;
         }
-        @media (min-width: 768px) {
-            .grid {
-                grid-template-columns: repeat(4, minmax(0, 1fr));
-            }
-        }
-        .item {
-            background: #f9fafb;
-            border-radius: 12px;
+
+        .media-card {
+            border-radius: 10px;
             overflow: hidden;
+            background: #f9fafb;
             border: 1px solid #e5e7eb;
         }
-        .item img,
-        .item video {
-            width: 100%;
-            height: 170px;
-            object-fit: cover;
+
+        .media-card img,
+        .media-card video {
             display: block;
+            width: 100%;
+            height: 200px;
+            object-fit: cover;
+            background: #d1d5db;
         }
-        .item-meta {
-            padding: 6px 8px;
-            text-align: right;
-            font-size: 11px;
-            color: #6b7280;
-        }
-        .badge {
-            display: inline-flex;
+
+        .media-info {
+            padding: 0.75rem 0.9rem 0.9rem;
+            font-size: 0.85rem;
+            color: #4b5563;
+            display: flex;
+            justify-content: space-between;
             align-items: center;
-            border-radius: 999px;
-            padding: 4px 10px;
-            font-size: 11px;
-            background: #eef2ff;
-            color: #3730a3;
-            margin-top: 6px;
+            gap: 0.5rem;
         }
-        .footer {
-            margin-top: 16px;
-            font-size: 11px;
-            color: #9ca3af;
+
+        .badge {
+            font-size: 0.7rem;
+            text-transform: uppercase;
+            letter-spacing: .04em;
+            padding: 0.2rem 0.45rem;
+            border-radius: 999px;
+            background: #e5e7eb;
+            color: #374151;
+        }
+
+        .empty {
+            padding: 2rem;
             text-align: center;
+            color: #6b7280;
+            font-size: 0.95rem;
+        }
+
+        .footer {
+            margin-top: 1.5rem;
+            text-align: center;
+            font-size: 0.75rem;
+            color: #9ca3af;
+        }
+
+        a.download-link {
+            text-decoration: none;
+            color: #2563eb;
+            font-weight: 500;
+            font-size: 0.8rem;
         }
     </style>
 </head>
 <body>
 <div class="page">
     <div class="card">
-        <div class="header">
-            <p class="title">
-                @if($empreendimento && $empreendimento->nome)
-                    {{ $empreendimento->nome }}
-                @else
-                    Empreendimento #{{ $empreendimentoId }}
-                @endif
-            </p>
 
-            <p class="subtitle">
-                Galeria compartilhada por
-                @if($corretor && $corretor->name)
-                    <strong>{{ $corretor->name }}</strong>
-                @else
-                    seu corretor
-                @endif
-            </p>
+        <h1>
+            @if($empreendimento && $empreendimento->nome)
+                {{ $empreendimento->nome }}
+            @else
+                Empreendimento #{{ $empreendimentoId }}
+            @endif
+        </h1>
 
-            <div class="badge">
-                Fotos e vídeos do imóvel
-            </div>
+        <div class="subtitle">
+            Galeria compartilhada por
+            @if($corretor && $corretor->name)
+                {{ $corretor->name }}
+            @else
+                seu corretor
+            @endif
         </div>
 
+        <h2 style="font-size: 1rem; margin-bottom: 0.75rem;">Fotos e vídeos do imóvel</h2>
+
         @if($arquivos->isEmpty())
-            <p class="subtitle">
+            <div class="empty">
                 Ainda não há mídias disponíveis nesta galeria.
-            </p>
+            </div>
         @else
             <div class="grid">
                 @foreach($arquivos as $item)
-                    <div class="item">
+                    <div class="media-card">
                         @if($item['tipo'] === 'foto')
-                            <a href="{{ $item['url'] }}" target="_blank" rel="noopener">
-                                <img src="{{ $item['url'] }}" alt="Foto do imóvel">
-                            </a>
+                            <img src="{{ $item['url'] }}" alt="Foto do imóvel">
                         @elseif($item['tipo'] === 'video')
-                            <video controls>
-                                <source src="{{ $item['url'] }}">
-                                Seu navegador não suporta vídeo.
-                            </video>
+                            <video src="{{ $item['url'] }}" controls></video>
                         @else
-                            <div style="padding: 12px; font-size: 12px;">
-                                <a href="{{ $item['url'] }}" target="_blank" rel="noopener">
+                            <div style="padding: 1rem;">
+                                Arquivo disponível<br>
+                                <a href="{{ $item['url'] }}" target="_blank" class="download-link">
                                     Abrir arquivo
                                 </a>
                             </div>
                         @endif
 
-                        <div class="item-meta">
+                        <div class="media-info">
+                            <span class="badge">
+                                @if($item['tipo'] === 'foto')
+                                    Foto
+                                @elseif($item['tipo'] === 'video')
+                                    Vídeo
+                                @else
+                                    Arquivo
+                                @endif
+                            </span>
+
                             @if(!empty($item['data']))
-                                {{ \Carbon\Carbon::parse($item['data'])->format('d/m/Y H:i') }}
+                                <span>{{ $item['data'] }}</span>
                             @endif
                         </div>
                     </div>
@@ -154,6 +179,7 @@
         <div class="footer">
             ImobAgent · Galeria automática de mídias do corretor
         </div>
+
     </div>
 </div>
 </body>

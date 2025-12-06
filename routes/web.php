@@ -354,7 +354,10 @@ Route::middleware(['auth'])->group(function () {
 Route::post('/midias/upload', [MidiaController::class, 'store']);
 Route::get('/midias/empreendimento/{empreendimentoId}', [MidiaController::class, 'listarPorEmpreendimento']);
 
-Route::get('/galeria/{empreendimentoId}/{corretorId}', function (int $empreendimentoId, int $corretorId) {
+Route::get('/galeria/{empreendimentoId}/{corretorId}', function ($empreendimentoId, $corretorId) {
+
+    $empreendimentoId = (int) $empreendimentoId;
+    $corretorId       = (int) $corretorId;
 
     $midias = EmpreendimentoMidia::with(['empreendimento', 'corretor'])
         ->where('empreendimento_id', $empreendimentoId)
@@ -373,7 +376,7 @@ Route::get('/galeria/{empreendimentoId}/{corretorId}', function (int $empreendim
         return [
             'tipo' => $m->arquivo_tipo,
             'url'  => Storage::disk('s3')->url($m->arquivo_path),
-            'data' => $m->created_at,
+            'data' => $m->created_at?->format('d/m/Y H:i'),
         ];
     });
 
@@ -385,5 +388,6 @@ Route::get('/galeria/{empreendimentoId}/{corretorId}', function (int $empreendim
         'corretorId'      => $corretorId,
     ]);
 })->name('galeria.publica');
+
 
 require __DIR__ . '/auth.php';
