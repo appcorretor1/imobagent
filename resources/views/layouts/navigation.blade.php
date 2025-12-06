@@ -3,8 +3,9 @@
     use Illuminate\Support\Str;
     use App\Helpers\ColorHelper;
 
-    $role = auth()->user()->role ?? null;
-    $company = auth()->user()->company ?? null;
+    $user    = auth()->user();
+    $role    = $user->role ?? null;
+    $company = $user->company ?? null;
 
     // Logo da empresa
     if ($company && $company->logo_path) {
@@ -22,9 +23,13 @@
     $isDark = ColorHelper::isDark($navColor);
 
     // Cores globais de texto
-    $navText        = $isDark ? 'text-white'       : 'text-gray-800';
-    $navTextSecondary = $isDark ? 'text-gray-200' : 'text-gray-600';
-    $navHover       = $isDark ? 'hover:text-gray-200' : 'hover:text-gray-900';
+    $navText          = $isDark ? 'text-white'       : 'text-gray-800';
+    $navTextSecondary = $isDark ? 'text-gray-200'    : 'text-gray-600';
+    $navHover         = $isDark ? 'hover:text-gray-200' : 'hover:text-gray-900';
+
+    $userName  = $user->name  ?? 'Usuário';
+    $userEmail = $user->email ?? '';
+    $initials  = $user ? Str::upper(Str::substr($userName, 0, 2)) : 'US';
 @endphp
 
 <nav x-data="{ open: false }"
@@ -62,15 +67,13 @@
                         </x-nav-link>
                     @endif
 
-                   <x-nav-link 
-    :href="route('dashboard.meus-empreendimentos')"
-    :active="request()->routeIs('dashboard.meus-empreendimentos*')"
->
-    Meus empreendimentos
-</x-nav-link>
-
-
-
+                    {{-- Meus empreendimentos (galeria do corretor) --}}
+                    <x-nav-link 
+                        :href="route('dashboard.meus-empreendimentos')"
+                        :active="request()->routeIs('dashboard.meus-empreendimentos*')"
+                        class="{{ $navText }} {{ $navHover }} font-medium">
+                        Meus empreendimentos
+                    </x-nav-link>
                 </div>
             </div>
 
@@ -83,11 +86,11 @@
                     <x-slot name="trigger">
                         <button class="flex items-center gap-2 {{ $navText }} {{ $navHover }} font-medium focus:outline-none">
 
-                            <span>{{ Auth::user()->name }}</span>
+                            <span>{{ $userName }}</span>
 
                             <span class="inline-flex items-center justify-center h-8 w-8 rounded-full 
                                 {{ $isDark ? 'bg-white text-gray-800' : 'bg-gray-800 text-white' }}">
-                                {{ Str::substr(Auth::user()->name, 0, 2) }}
+                                {{ $initials }}
                             </span>
 
                         </button>
@@ -98,7 +101,7 @@
 
                         <div class="bg-white p-2 rounded-md shadow-md">
 
-                            @if(auth()->user()->role === 'diretor')
+                            @if($user && $user->role === 'diretor')
                                 <x-dropdown-link :href="route('admin.users.index')" class="text-gray-700">
                                     Gestão de usuários
                                 </x-dropdown-link>
@@ -160,9 +163,10 @@
 
         <div class="pt-2 pb-3 space-y-1">
 
-            <x-responsive-nav-link :href="route('admin.dashboard')" 
-                                   :active="request()->routeIs('admin.dashboard')"
-                                   class="{{ $navText }}">
+            <x-responsive-nav-link 
+                :href="route('admin.dashboard')" 
+                :active="request()->routeIs('admin.dashboard')"
+                class="{{ $navText }}">
                 Dashboard
             </x-responsive-nav-link>
 
@@ -175,13 +179,23 @@
                 </x-responsive-nav-link>
             @endif
 
+            {{-- Meus empreendimentos (mobile) --}}
+            <x-responsive-nav-link 
+                :href="route('dashboard.meus-empreendimentos')" 
+                :active="request()->routeIs('dashboard.meus-empreendimentos*')"
+                class="{{ $navText }}">
+                Meus empreendimentos
+            </x-responsive-nav-link>
+
         </div>
 
         <!-- User Info Mobile -->
         <div class="pt-4 pb-1 border-t border-gray-300">
             <div class="px-4">
-                <div class="font-medium text-base {{ $navText }}">{{ Auth::user()->name }}</div>
-                <div class="font-medium text-sm {{ $navTextSecondary }}">{{ Auth::user()->email }}</div>
+                <div class="font-medium text-base {{ $navText }}">{{ $userName }}</div>
+                @if($userEmail)
+                    <div class="font-medium text-sm {{ $navTextSecondary }}">{{ $userEmail }}</div>
+                @endif
             </div>
 
             <div class="mt-3 space-y-1">

@@ -332,14 +332,18 @@ if (isset($hasMedia) && $hasMedia && !empty($thread->selected_empreendimento_id)
                 $saved[] = $this->saveEmpreendimentoMediaFromUrl($url, $empId, $corretorId);
             }
 
-            $pasta       = "midias/empreendimentos/{$empId}/corretores/{$corretorId}/";
-            $linkGaleria = rtrim(Storage::disk('s3')->url($pasta), '/');
+          $linkGaleria = route('galeria.publica', [
+    'empreendimentoId' => $empId,
+    'corretorId'       => $corretorId,
+]);
 
-            $this->sendText(
-                $phone,
-                "✅ Salvei *" . count($saved) . "* arquivo(s) na sua galeria desse empreendimento.\n\n" .
-                "🔗 Link da sua galeria:\n{$linkGaleria}"
-            );
+
+          $this->sendText(
+    $phone,
+    "✅ Salvei *" . count($saved) . "* arquivo(s) na sua galeria desse empreendimento.\n\n" .
+    "🔗 Link da sua galeria:\n{$linkGaleria}"
+);
+
         }
     } catch (\Throwable $e) {
         Log::error('WPP galeria: erro ao salvar mídia', [

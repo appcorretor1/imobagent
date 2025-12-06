@@ -302,7 +302,6 @@ Route::get('/debug/vs/{empreendimento}', function (\App\Models\Empreendimento $e
     ]);
 })->middleware('auth');
 
-
 /* ASSESSOR DO CORRETOR ------*
 corretor enviar midia sobre um empreendimento */
 
@@ -337,8 +336,10 @@ Route::middleware(['auth'])->group(function () {
             ];
         });
 
-        $pasta      = "midias/empreendimentos/{$empreendimentoId}/corretores/{$corretorId}/";
-        $linkGaleria = rtrim(Storage::disk('s3')->url($pasta), '/');
+        $linkGaleria = route('galeria.publica', [
+            'empreendimentoId' => $empreendimentoId,
+            'corretorId'       => $corretorId,
+        ]);
 
         return view('dashboard.meus-empreendimentos-show', [
             'empreendimentoId' => $empreendimentoId,
@@ -353,5 +354,36 @@ Route::middleware(['auth'])->group(function () {
 Route::post('/midias/upload', [MidiaController::class, 'store']);
 Route::get('/midias/empreendimento/{empreendimentoId}', [MidiaController::class, 'listarPorEmpreendimento']);
 
+Route::get('/galeria/{empreendimentoId}/{corretorId}', function (int $empreendimentoId, int $corretorId) {
+
+    $midias = EmpreendimentoMidia::with(['empreendimento', 'corretor'])
+        ->where('empreendimento_id', $empreendimentoId)
+        ->where('corretor_id', $corretorId)
+        ->orderBy('created_at')
+        ->get();
+
+    if ($midias->isEmpty()) {
+        abort(404);
+    }
+
+    $empreendimento = $midias->first()->empreendimento;
+    $corretor       = $midias->first()->corretor;
+
+    $arquivos = $midias->map(function ($m) {
+        return [
+            'tipo' => $m->arquivo_tipo,
+            'url'  => Storage::disk('s3')->url($m->arquivo_path),
+            'data' => $m->created_at,
+        ];
+    });
+
+    return view('public.galeria', [
+        'arquivos'        => $arquivos,
+        'empreendimento'  => $empreendimento,
+        'corretor'        => $corretor,
+        'empreendimentoId'=> $empreendimentoId,
+        'corretorId'      => $corretorId,
+    ]);
+})->name('galeria.publica');
 
 require __DIR__ . '/auth.php';

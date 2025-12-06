@@ -18,8 +18,9 @@
                         $emp = $g->empreendimento ?? null;
                     @endphp
 
-                    <a href="{{ route('admin.meus-empreendimentos.show', $g->empreendimento_id) }}"
-                       class="block bg-white rounded-xl shadow p-4 hover:shadow-md transition">
+                  <a href="{{ route('dashboard.meus-empreendimentos.show', $g->empreendimento_id) }}"
+   class="block bg-white rounded-xl shadow p-4 hover:shadow-md transition">
+
                         <div class="text-sm text-gray-500 mb-1">
                             @if($emp)
                                 {{ $emp->nome ?? ('Empreendimento #' . $g->empreendimento_id) }}
