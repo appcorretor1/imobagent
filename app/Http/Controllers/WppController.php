@@ -290,11 +290,12 @@ if (str_contains($norm, 'criar empreendimento') || str_contains($norm, 'criar re
 $this->attachCorretorToThread($thread, $phone);
 
 // ================== GALERIA: salvar mídias do corretor no empreendimento ==================
-if (isset($hasMedia) && $hasMedia && !empty($thread->selected_empreendimento_id) && !empty($thread->corretor_id)) {
+if ($hasMedia && !empty($thread->selected_empreendimento_id) && !empty($thread->corretor_id)) {
     try {
         $empId      = (int) $thread->selected_empreendimento_id;
         $corretorId = (int) $thread->corretor_id;
 
+        // Coleta todas as URLs de mídia do payload
         $urls = [];
 
         if (!empty($p['fileUrl'])) {
@@ -332,18 +333,14 @@ if (isset($hasMedia) && $hasMedia && !empty($thread->selected_empreendimento_id)
                 $saved[] = $this->saveEmpreendimentoMediaFromUrl($url, $empId, $corretorId);
             }
 
-          $linkGaleria = route('galeria.publica', [
-    'empreendimentoId' => $empId,
-    'corretorId'       => $corretorId,
-]);
-
-
-          $this->sendText(
-    $phone,
-    "✅ Salvei *" . count($saved) . "* arquivo(s) na sua galeria desse empreendimento.\n\n" .
-    "🔗 Link da sua galeria:\n{$linkGaleria}"
-);
-
+            // Aqui NÃO mandamos mensagem pro corretor,
+            // só salvamos as mídias e deixamos ele usar o link da galeria no painel.
+            Log::info('WPP galeria: mídias salvas', [
+                'phone'        => $phone,
+                'empreendimento' => $empId,
+                'corretor'       => $corretorId,
+                'qtde'           => count($saved),
+            ]);
         }
     } catch (\Throwable $e) {
         Log::error('WPP galeria: erro ao salvar mídia', [
@@ -351,13 +348,14 @@ if (isset($hasMedia) && $hasMedia && !empty($thread->selected_empreendimento_id)
             'err'   => $e->getMessage(),
         ]);
 
+        // Só avisa em caso de erro
         $this->sendText(
             $phone,
             "⚠️ Não consegui salvar essas mídias agora. Tente novamente em alguns minutos."
         );
     }
 
-    // não registra essa mensagem como texto e não continua pro fluxo de IA
+    // Não deixa seguir para IA/fluxos normais, já tratamos como upload de mídia
     return response()->json(['ok' => true, 'handled' => 'galeria_midias']);
 }
 // ================== FIM GALERIA ==================

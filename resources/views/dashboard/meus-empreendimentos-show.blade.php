@@ -5,7 +5,7 @@
                 Galeria do empreendimento #{{ $empreendimentoId }}
             </h2>
 
-            <a href="{{ route('admin.meus-empreendimentos') }}"
+            <a href="{{ route('dashboard.meus-empreendimentos') }}"
                class="text-sm text-indigo-600 hover:underline">
                 ← Voltar
             </a>

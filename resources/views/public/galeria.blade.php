@@ -167,9 +167,9 @@
                                 @endif
                             </span>
 
-                            @if(!empty($item['data']))
+                            <!--- @if(!empty($item['data']))
                                 <span>{{ $item['data'] }}</span>
-                            @endif
+                            @endif ---> 
                         </div>
                     </div>
                 @endforeach
@@ -177,7 +177,7 @@
         @endif
 
         <div class="footer">
-            ImobAgent · Galeria automática de mídias do corretor
+            ImobAgent · 2026
         </div>
 
     </div>
