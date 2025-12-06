@@ -30,24 +30,24 @@ public function index(Request $request)
         ->orderBy('nome')
         ->get();
 
-    // 👇 status vem da query string, default = 'ativo'
+    // status vem da query string, default = 'ativo'
     $status = $request->input('status', 'ativo');
 
-    $q = Empreendimento::where('company_id', $companyId);
+    // 🔥 AQUI: filtra por empreendimentos que NÃO são revenda
+    $q = Empreendimento::where('company_id', $companyId)
+        ->where('is_revenda', 0); // 👈 só empreendimentos oficiais da empresa
 
-    // 👇 aplica filtro de ativo / todos
+    // filtro de ativos
     if ($status === 'ativo') {
         $q->where('ativo', 1);
     }
-    // se quiser futuramente, dá pra ter 'inativo' também:
-    // if ($status === 'inativo') {
-    //     $q->where('ativo', 0);
-    // }
 
+    // filtro por incorporadora
     if ($request->filled('incorporadora_id')) {
         $q->where('incorporadora_id', $request->incorporadora_id);
     }
 
+    // filtro por nome
     if ($request->filled('search')) {
         $q->where('nome', 'like', '%' . $request->search . '%');
     }

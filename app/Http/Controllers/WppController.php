@@ -28,6 +28,7 @@ use App\Models\EmpreendimentoMidia;
 class WppController extends Controller
 {
 
+        private const GALERIA_TIMEOUT_MIN = 5; // janela de 5 minutos
     
     /** TTL do mapa de empreendimentos (minutos) */
     protected int $empMapTtlMinutes = 15;
@@ -289,76 +290,158 @@ if (str_contains($norm, 'criar empreendimento') || str_contains($norm, 'criar re
         // 🔹 tenta vincular corretor e, se existir, company_id também
 $this->attachCorretorToThread($thread, $phone);
 
-// ================== GALERIA: salvar mídias do corretor no empreendimento ==================
-if ($hasMedia && !empty($thread->selected_empreendimento_id) && !empty($thread->corretor_id)) {
-    try {
-        $empId      = (int) $thread->selected_empreendimento_id;
-        $corretorId = (int) $thread->corretor_id;
 
-        // Coleta todas as URLs de mídia do payload
-        $urls = [];
+// -------------------------------------------------------
+//  PROCESSAR LOTE DE MÍDIAS (foto/vídeo) DE UMA SÓ VEZ
+// -------------------------------------------------------
+if (!empty($payload['messages'])) {
 
-        if (!empty($p['fileUrl'])) {
-            $urls[] = $this->scalarize($p['fileUrl']);
+    $midias = [];
+    foreach ($payload['messages'] as $msg) {
+        if (!empty($msg['mimetype']) && !empty($msg['mediaUrl'])) {
+            $midias[] = $msg;
         }
-
-        if (isset($p['medias']) && is_array($p['medias'])) {
-            foreach ($p['medias'] as $media) {
-                $u = $this->scalarize($media['fileUrl'] ?? '');
-                if ($u !== '') {
-                    $urls[] = $u;
-                }
-            }
-        }
-
-        if (!empty($p['image'])) {
-            $urls[] = $this->scalarize($p['image']);
-        }
-        if (!empty($p['video'])) {
-            $urls[] = $this->scalarize($p['video']);
-        }
-        if (!empty($p['document'])) {
-            $urls[] = $this->scalarize($p['document']);
-        }
-
-        if (empty($urls)) {
-            Log::warning('WPP galeria: hasMedia=true mas sem URLs utilizáveis', [
-                'phone'   => $phone,
-                'payload' => array_keys($p),
-            ]);
-        } else {
-            $saved = [];
-
-            foreach ($urls as $url) {
-                $saved[] = $this->saveEmpreendimentoMediaFromUrl($url, $empId, $corretorId);
-            }
-
-            // Aqui NÃO mandamos mensagem pro corretor,
-            // só salvamos as mídias e deixamos ele usar o link da galeria no painel.
-            Log::info('WPP galeria: mídias salvas', [
-                'phone'        => $phone,
-                'empreendimento' => $empId,
-                'corretor'       => $corretorId,
-                'qtde'           => count($saved),
-            ]);
-        }
-    } catch (\Throwable $e) {
-        Log::error('WPP galeria: erro ao salvar mídia', [
-            'phone' => $phone,
-            'err'   => $e->getMessage(),
-        ]);
-
-        // Só avisa em caso de erro
-        $this->sendText(
-            $phone,
-            "⚠️ Não consegui salvar essas mídias agora. Tente novamente em alguns minutos."
-        );
     }
 
-    // Não deixa seguir para IA/fluxos normais, já tratamos como upload de mídia
-    return response()->json(['ok' => true, 'handled' => 'galeria_midias']);
+    if (count($midias) > 0) {
+
+        // 1) Tenta usar o empreendimento selecionado
+        $empreendimentoId = $thread->selected_empreendimento_id;
+
+        // 2) Se não tiver selecionado, tenta usar o último usado na galeria
+        if (!$empreendimentoId) {
+            $ctx = $thread->context ?? [];
+            if (!is_array($ctx)) {
+                $ctx = json_decode($ctx, true) ?: [];
+            }
+
+            $lastEmp = $ctx['last_gallery_emp_id'] ?? null;
+            $lastAt  = $ctx['last_gallery_at'] ?? null;
+
+            if ($lastEmp && $lastAt) {
+                try {
+                    $lastAtCarbon = \Carbon\Carbon::parse($lastAt);
+                } catch (\Throwable $e) {
+                    $lastAtCarbon = null;
+                }
+
+                // ainda dentro da janela? -> usa automaticamente o último empreendimento
+                if ($lastAtCarbon && $lastAtCarbon->gt(now()->subMinutes(self::GALERIA_TIMEOUT_MIN))) {
+                    $empreendimentoId = (int) $lastEmp;
+                } else {
+                    // 🔴 JANELA EXPIRADA → perguntar se quer usar o último empreendimento
+
+                    $ctx['gallery_ask_emp'] = (int) $lastEmp;
+                    $thread->context = $ctx;
+                    $thread->save();
+
+                    $emp = \App\Models\Empreendimento::find($lastEmp);
+                    $nomeEmp = $emp?->nome ?? 'último empreendimento que você usou';
+
+                    $this->sendWppMessage(
+                        $phone,
+                        "Você quer adicionar essas mídias na galeria do empreendimento *{$nomeEmp}*?\n\n" .
+                        "Responda com *SIM* ou *NÃO*.\n\n" .
+                        "Depois é só reenviar as fotos/vídeos 🙂"
+                    );
+
+                    // não salva nada agora, espera a resposta do usuário
+                    return response()->json(['ok' => true, 'handled' => 'galeria_pergunta']);
+                }
+            } else {
+                // Nunca usou galeria / sem histórico → deixa seguir o fluxo normal
+                // (se quiser, pode mandar uma mensagem explicando)
+            }
+        }
+
+        // Se mesmo assim não tiver empreendimento, não trata como galeria
+        if (!$empreendimentoId) {
+            // segue fluxo normal da IA
+        } else {
+
+            // 🔹 Daqui para baixo é praticamente o que você já tinha
+
+            $corretorId = $thread->user_id;
+            $salvos     = 0;
+
+            foreach ($midias as $m) {
+
+                $mediaUrl = $m['mediaUrl'];
+                $mime     = $m['mimetype'];
+
+                \Log::info("WPP galeria: baixando mídia da Z-API", [
+                    'url'            => $mediaUrl,
+                    'empreendimento' => $empreendimentoId,
+                    'corretor'       => $corretorId,
+                ]);
+
+                $contents = @file_get_contents($mediaUrl);
+                if (!$contents) {
+                    continue;
+                }
+
+                $tipo = str_contains($mime, 'video')
+                    ? 'video'
+                    : (str_contains($mime, 'image') ? 'foto' : 'outro');
+
+                $ext = match (true) {
+                    str_contains($mime, 'jpeg') => 'jpg',
+                    str_contains($mime, 'png')  => 'png',
+                    str_contains($mime, 'mp4')  => 'mp4',
+                    default                     => 'bin'
+                };
+
+                $filename = "wpp_" . now()->format('Ymd_His') . "_" . uniqid() . "." . $ext;
+                $path     = "midias/empreendimentos/{$empreendimentoId}/corretores/{$corretorId}/{$filename}";
+
+                \Storage::disk('s3')->put($path, $contents);
+
+                \App\Models\EmpreendimentoMidia::create([
+                    'empreendimento_id' => $empreendimentoId,
+                    'corretor_id'       => $corretorId,
+                    'arquivo_path'      => $path,
+                    'arquivo_tipo'      => $tipo,
+                ]);
+
+                $salvos++;
+            }
+
+            // 3) Atualiza contexto da última galeria usada
+            $ctx = $thread->context ?? [];
+            if (!is_array($ctx)) {
+                $ctx = json_decode($ctx, true) ?: [];
+            }
+
+            $ctx['last_gallery_emp_id'] = (int) $empreendimentoId;
+            $ctx['last_gallery_at']     = now()->toIso8601String();
+            unset($ctx['gallery_ask_emp']); // limpa qualquer pergunta pendente
+
+            $thread->context = $ctx;
+            $thread->save();
+
+            // 4) Mensagem de confirmação
+            $emp = \App\Models\Empreendimento::find($empreendimentoId);
+            $nomeEmp = $emp?->nome ?? 'empreendimento';
+
+            $mensagem = "✅ Salvei {$salvos} arquivo(s) na sua galeria do: {$nomeEmp}.\n\n";
+            $mensagem .= "🔗 Link da sua galeria:\n";
+            $mensagem .= route('galeria.publica', [
+                'empreendimentoId' => $empreendimentoId,
+                'corretorId'       => $corretorId,
+            ]);
+
+            $this->sendWppMessage($phone, $mensagem);
+
+            return response()->json(['ok' => true]);
+        }
+    }
 }
+
 // ================== FIM GALERIA ==================
+
+
+
+
 
 // 🔹 Registra a mensagem recebida do usuário/corretor (apenas texto)
 if ($text !== '') {
@@ -375,6 +458,10 @@ if ($text !== '') {
 
 $ctx = $thread->context ?? [];
 
+// (se não tiver, adiciona esse tratamento)
+if (!is_array($ctx)) {
+    $ctx = json_decode($ctx, true) ?: [];
+}
 
         Log::info('WPP inbound start', [
             'phone'  => $phone,
@@ -386,6 +473,53 @@ $ctx = $thread->context ?? [];
             'text'   => $text,
             'norm'   => $norm,
         ]);
+
+        // -------------------------------------------------------
+// CONFIRMAÇÃO DA GALERIA (SIM / NÃO)
+// -------------------------------------------------------
+if (!empty($text) && isset($ctx['gallery_ask_emp'])) {
+    $resp = \Illuminate\Support\Str::lower(trim($norm));
+
+    if (in_array($resp, ['sim', 's', 'yes', 'y'])) {
+
+        $empreendimentoId = (int) $ctx['gallery_ask_emp'];
+        unset($ctx['gallery_ask_emp']);
+
+        // deixa esse empreendimento como selecionado para as próximas mídias
+        $thread->selected_empreendimento_id = $empreendimentoId;
+
+        // já atualiza também como "última galeria usada"
+        $ctx['last_gallery_emp_id'] = $empreendimentoId;
+        $ctx['last_gallery_at']     = now()->toIso8601String();
+
+        $thread->context = $ctx;
+        $thread->save();
+
+        $emp = \App\Models\Empreendimento::find($empreendimentoId);
+        $nomeEmp = $emp?->nome ?? 'empreendimento';
+
+        $this->sendWppMessage(
+            $phone,
+            "Perfeito! As próximas mídias que você enviar vou salvar na galeria do empreendimento *{$nomeEmp}*."
+        );
+
+        return response()->json(['ok' => true, 'handled' => 'galeria_confirmada']);
+    }
+
+    if (in_array($resp, ['nao', 'não', 'n'])) {
+        unset($ctx['gallery_ask_emp']);
+        $thread->context = $ctx;
+        $thread->save();
+
+        $this->sendWppMessage(
+            $phone,
+            "Beleza, não vou salvar essas mídias em nenhuma galeria por enquanto. 👍"
+        );
+
+        return response()->json(['ok' => true, 'handled' => 'galeria_recusada']);
+    }
+}
+
 
         // ===== MENU DE ATALHOS =====
 if ($this->isShortcutMenuCommand($norm)) {
