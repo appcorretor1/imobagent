@@ -356,11 +356,11 @@ if ($hasMedia) {
         return response()->json(['ok' => false, 'error' => 'sem_corretor_para_midias'], 422);
     }
 
-       // 5) Montar lista de URLs de mídia a partir do payload da Z-API
+         // 5) Montar lista de URLs de mídia a partir do payload da Z-API
     $urls = [];
 
     // a) Cenário simples: veio um único fileUrl na raiz
-    if (!empty($p['fileUrl'])) {
+    if (!empty($p['fileUrl']) && is_string($p['fileUrl'])) {
         $urls[] = $p['fileUrl'];
     }
 
@@ -368,7 +368,7 @@ if ($hasMedia) {
     if (isset($p['medias']) && is_array($p['medias'])) {
         foreach ($p['medias'] as $m) {
             $u = $m['mediaUrl'] ?? $m['fileUrl'] ?? null;
-            if ($u) {
+            if ($u && is_string($u)) {
                 $urls[] = $u;
             }
         }
@@ -377,59 +377,50 @@ if ($hasMedia) {
     // c) Integrações que mandam via "messages" (Make, etc.)
     if (!empty($p['messages']) && is_array($p['messages'])) {
         foreach ($p['messages'] as $msg) {
-            if (!empty($msg['mimetype']) && !empty($msg['mediaUrl'])) {
+            if (!empty($msg['mimetype']) && !empty($msg['mediaUrl']) && is_string($msg['mediaUrl'])) {
                 $urls[] = $msg['mediaUrl'];
             }
         }
     }
 
-    // d) Z-API mandando direto em "image"
+    // 🚫 NÃO usar mais $p['image'] como URL de mídia (está pegando foto de perfil)
     if (!empty($p['image'])) {
-        // Pode ser string ou array, vamos tratar os dois casos
-        if (is_string($p['image'])) {
-            // se já vier como URL
-            if (str_starts_with($p['image'], 'http')) {
-                $urls[] = $p['image'];
-            } else {
-                // se for base64 ou algo diferente, loga pra depurar depois
-                \Log::info('WPP galeria debug image string', [
-                    'phone' => $phone,
-                    'image_len' => strlen($p['image']),
-                    'image_sample' => substr($p['image'], 0, 50),
-                ]);
-            }
-        } elseif (is_array($p['image'])) {
-            foreach (['url', 'fileUrl', 'mediaUrl'] as $k) {
-                if (!empty($p['image'][$k]) && is_string($p['image'][$k])) {
-                    $urls[] = $p['image'][$k];
-                }
-            }
+        if (is_array($p['image'])) {
             \Log::info('WPP galeria debug image array', [
-                'phone' => $phone,
+                'phone'      => $phone,
                 'image_keys' => array_keys($p['image']),
             ]);
+        } else {
+            \Log::info('WPP galeria debug image scalar', [
+                'phone'  => $phone,
+                'type'   => gettype($p['image']),
+                'sample' => is_string($p['image']) ? substr($p['image'], 0, 50) : null,
+            ]);
         }
+        // não adiciona nada em $urls a partir de "image"
     }
 
-    // e) Algumas configs usam "photo" em vez de "image"
+    // ✅ Usar "photo" como fonte principal da mídia da mensagem
     if (!empty($p['photo'])) {
-        if (is_string($p['photo']) && str_starts_with($p['photo'], 'http')) {
-            $urls[] = $p['photo'];
-        } elseif (is_array($p['photo'])) {
-            foreach (['url', 'fileUrl', 'mediaUrl'] as $k) {
+        if (is_array($p['photo'])) {
+            \Log::info('WPP galeria debug photo array', [
+                'phone'      => $phone,
+                'photo_keys' => array_keys($p['photo']),
+            ]);
+
+            foreach (['imageUrl', 'fileUrl', 'mediaUrl', 'url'] as $k) {
                 if (!empty($p['photo'][$k]) && is_string($p['photo'][$k])) {
                     $urls[] = $p['photo'][$k];
                 }
             }
-            \Log::info('WPP galeria debug photo array', [
-                'phone' => $phone,
-                'photo_keys' => array_keys($p['photo']),
-            ]);
+        } elseif (is_string($p['photo']) && str_starts_with($p['photo'], 'http')) {
+            $urls[] = $p['photo'];
         }
     }
 
     // Garante que não tem lixo/duplicados
     $urls = array_values(array_unique(array_filter($urls)));
+
 
 
     if (empty($urls)) {
