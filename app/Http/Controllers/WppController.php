@@ -418,7 +418,6 @@ if (!empty($p['photo'])) {
 $urls = array_values(array_unique(array_filter($urls)));
 
 
-
     if (empty($urls)) {
         \Log::warning('WPP galeria: hasMedia=true mas nenhuma URL encontrada', [
             'phone'   => $phone,
@@ -444,29 +443,54 @@ $urls = array_values(array_unique(array_filter($urls)));
         }
 
         if ($salvos > 0) {
-            // Atualiza contexto da última galeria usada
-            $ctx['last_gallery_emp_id'] = (int) $empreendimentoId;
-            $ctx['last_gallery_at']     = now()->toIso8601String();
-            unset($ctx['gallery_ask_emp']); // limpa qualquer pergunta pendente
 
-            $thread->context = $ctx;
-            $thread->save();
 
-            $emp = \App\Models\Empreendimento::find($empreendimentoId);
-            $nomeEmp = $emp?->nome ?? 'empreendimento';
+ // 🔄 Mensagem de progresso (enviada no máximo 1 vez a cada 5s por corretor)
+    $progressKey = "galeria:progress:{$phone}";
+    if (Cache::add($progressKey, 1, now()->addSeconds(5))) {
+        // Cache::add só grava se a chave NÃO existir → ou seja, primeira msg no intervalo
+        $this->sendText(
+            $phone,
+            "⏳ Estou salvando suas fotos e vídeos na galeria desse empreendimento.\n" .
+            "Pode continuar enviando, te aviso quando terminar de salvar. 🙂"
+        );
+    }
 
-            $mensagem = "✅ Salvei {$salvos} arquivo(s) na sua galeria do: *{$nomeEmp}*.\n\n";
-            $mensagem .= "🔗 Link da sua galeria:\n";
-            $mensagem .= route('galeria.publica', [
-                'empreendimentoId' => $empreendimentoId,
-                'corretorId'       => $corretorId,
-            ]);
+    // 3. Atualiza contexto da última galeria usada
+    $ctx = $thread->context ?? [];
+    if (!is_array($ctx)) {
+        $ctx = json_decode($ctx, true) ?: [];
+    }
 
-            $this->sendWppMessage($phone, $mensagem);
+    $ctx['last_gallery_emp_id'] = (int) $empreendimentoId;
+    $ctx['last_gallery_at']     = now()->toIso8601String();
+    unset($ctx['gallery_ask_emp']); // limpa qualquer pergunta pendente
 
-            // IMPORTANTE: como o objetivo era só enviar mídia, podemos encerrar aqui
-            return response()->json(['ok' => true, 'handled' => 'galeria_midias_salvas']);
-        }
+    $thread->context = $ctx;
+    $thread->save();
+
+    // 4. Calcula total atual de mídias na galeria
+    $totalAtual = \App\Models\EmpreendimentoMidia::where('empreendimento_id', $empreendimentoId)
+        ->where('corretor_id', $corretorId)
+        ->count();
+
+    $emp = \App\Models\Empreendimento::find($empreendimentoId);
+    $nomeEmp = $emp?->nome ?? 'empreendimento';
+
+    $urlGaleria = route('galeria.publica', [
+        'empreendimentoId' => $empreendimentoId,
+        'corretorId'       => $corretorId,
+    ]);
+
+    $mensagem  = "✅ Salvei *mais {$salvos} arquivo(s)* na sua galeria do: *{$nomeEmp}*.\n";
+    $mensagem .= "📸 Agora já são *{$totalAtual} arquivo(s)* salvos.\n\n";
+    $mensagem .= "🔗 Link da sua galeria:\n{$urlGaleria}";
+
+    $this->sendText($phone, $mensagem);
+
+    return response()->json(['ok' => true, 'handled' => 'galeria_midias_salvas']);
+}
+
     }
 }
 // -------------------------------------------------------
