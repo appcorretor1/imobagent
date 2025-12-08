@@ -4722,4 +4722,11 @@ private function saveEmpreendimentoMediaFromUrl(string $url, int $empreendimento
 }
 
 
+private function sendWppMessage(string $phone, string $text): void
+{
+    // só delega pro método que você já usa hoje
+    $this->sendText($phone, $text);
+}
+
+
 }
