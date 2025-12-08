@@ -68,20 +68,6 @@ if (!empty($p['image']) || !empty($p['video']) || !empty($p['document'])) {
     $hasMedia = true;
 }
 
-// Detecta se veio alguma mídia no payload da Z-API
-$hasMedia = false;
-
-if (!empty($p['fileUrl'])) {
-    $hasMedia = true;
-}
-
-if (isset($p['medias']) && is_array($p['medias']) && count($p['medias']) > 0) {
-    $hasMedia = true;
-}
-
-if (!empty($p['image']) || !empty($p['video']) || !empty($p['document'])) {
-    $hasMedia = true;
-}
 
 /**
  * 🔹 IMPORTANTE: ignorar mensagens SEM TEXTO E SEM MÍDIA
@@ -290,128 +276,142 @@ if (str_contains($norm, 'criar empreendimento') || str_contains($norm, 'criar re
         // 🔹 tenta vincular corretor e, se existir, company_id também
 $this->attachCorretorToThread($thread, $phone);
 
-
 // -------------------------------------------------------
-//  PROCESSAR LOTE DE MÍDIAS (foto/vídeo) DE UMA SÓ VEZ
+// PROCESSAR MÍDIAS (foto/vídeo) ENVIADAS PELO WHATSAPP
 // -------------------------------------------------------
-if (!empty($payload['messages'])) {
 
-    $midias = [];
-    foreach ($payload['messages'] as $msg) {
-        if (!empty($msg['mimetype']) && !empty($msg['mediaUrl'])) {
-            $midias[] = $msg;
+// 👉 Usa SEMPRE $p (payload bruto da request), não $payload
+if ($hasMedia) {
+
+    // 1) Determinar em QUAL empreendimento salvar
+    $empreendimentoId = $thread->selected_empreendimento_id;
+
+    // 2) Se não tiver selecionado, tenta o último usado na galeria
+    $ctx = $thread->context ?? [];
+    if (!is_array($ctx)) {
+        $ctx = json_decode($ctx, true) ?: [];
+    }
+
+    if (!$empreendimentoId) {
+        $lastEmp = $ctx['last_gallery_emp_id'] ?? null;
+        $lastAt  = $ctx['last_gallery_at'] ?? null;
+
+        if ($lastEmp && $lastAt) {
+            try {
+                $lastAtCarbon = \Carbon\Carbon::parse($lastAt);
+            } catch (\Throwable $e) {
+                $lastAtCarbon = null;
+            }
+
+            // ainda dentro da janela de timeout da galeria?
+            if ($lastAtCarbon && $lastAtCarbon->gt(now()->subMinutes(self::GALERIA_TIMEOUT_MIN))) {
+                $empreendimentoId = (int) $lastEmp;
+            } else {
+                // 🔴 JANELA EXPIRADA → perguntar se quer usar o último empreendimento
+                $ctx['gallery_ask_emp'] = (int) $lastEmp;
+                $thread->context = $ctx;
+                $thread->save();
+
+                $emp = \App\Models\Empreendimento::find($lastEmp);
+                $nomeEmp = $emp?->nome ?? 'último empreendimento que você usou';
+
+                $this->sendWppMessage(
+                    $phone,
+                    "Você quer adicionar essas mídias na galeria do empreendimento *{$nomeEmp}*?\n\n" .
+                    "Responda com *SIM* ou *NÃO*.\n\n" .
+                    "Depois é só reenviar as fotos/vídeos 🙂"
+                );
+
+                // não salva nada agora, espera a resposta do usuário
+                return response()->json(['ok' => true, 'handled' => 'galeria_pergunta']);
+            }
         }
     }
 
-    if (count($midias) > 0) {
+    // 3) Se mesmo assim não tiver empreendimento, não dá para salvar nada ainda
+    if (!$empreendimentoId) {
+        // aqui você pode só seguir para a IA, ou orientar o cara a escolher um empreendimento
+        // Vou preferir orientar:
+        $this->sendText(
+            $phone,
+            "Antes de salvar as fotos, preciso saber em qual empreendimento você quer usar.\n\n" .
+            "Digite *mudar empreendimento* para escolher um da lista ou *criar empreendimento* para cadastrar um novo."
+        );
+        return response()->json(['ok' => true, 'handled' => 'media_sem_emp']);
+    }
 
-        // 1) Tenta usar o empreendimento selecionado
-        $empreendimentoId = $thread->selected_empreendimento_id;
+    // 4) Descobrir o corretor (user) vinculado ao thread
+    $corretorId = $thread->user_id ?? $thread->corretor_id;
+    if (!$corretorId) {
+        // tenta vincular na marra
+        $this->attachCorretorToThread($thread, $phone);
+        $corretorId = $thread->user_id ?? $thread->corretor_id;
+    }
 
-        // 2) Se não tiver selecionado, tenta usar o último usado na galeria
-        if (!$empreendimentoId) {
-            $ctx = $thread->context ?? [];
-            if (!is_array($ctx)) {
-                $ctx = json_decode($ctx, true) ?: [];
+    if (!$corretorId) {
+        $this->sendText(
+            $phone,
+            "⚠️ Não consegui vincular seu usuário corretor. Verifique se seu número está cadastrado corretamente na plataforma."
+        );
+        return response()->json(['ok' => false, 'error' => 'sem_corretor_para_midias'], 422);
+    }
+
+    // 5) Montar lista de URLs de mídia a partir do payload da Z-API
+    $urls = [];
+
+    // a) Cenário simples: veio um único fileUrl
+    if (!empty($p['fileUrl'])) {
+        $urls[] = $p['fileUrl'];
+    }
+
+    // b) Algumas instâncias mandam um array "medias"
+    if (isset($p['medias']) && is_array($p['medias'])) {
+        foreach ($p['medias'] as $m) {
+            $u = $m['mediaUrl'] ?? $m['fileUrl'] ?? null;
+            if ($u) {
+                $urls[] = $u;
             }
+        }
+    }
 
-            $lastEmp = $ctx['last_gallery_emp_id'] ?? null;
-            $lastAt  = $ctx['last_gallery_at'] ?? null;
+    // c) Se você tiver integração via "messages" (ex.: Make/bridge), trata também:
+    if (!empty($p['messages']) && is_array($p['messages'])) {
+        foreach ($p['messages'] as $msg) {
+            if (!empty($msg['mimetype']) && !empty($msg['mediaUrl'])) {
+                $urls[] = $msg['mediaUrl'];
+            }
+        }
+    }
 
-            if ($lastEmp && $lastAt) {
-                try {
-                    $lastAtCarbon = \Carbon\Carbon::parse($lastAt);
-                } catch (\Throwable $e) {
-                    $lastAtCarbon = null;
-                }
+    // Garante que não tem lixo/duplicados
+    $urls = array_values(array_unique(array_filter($urls)));
 
-                // ainda dentro da janela? -> usa automaticamente o último empreendimento
-                if ($lastAtCarbon && $lastAtCarbon->gt(now()->subMinutes(self::GALERIA_TIMEOUT_MIN))) {
-                    $empreendimentoId = (int) $lastEmp;
-                } else {
-                    // 🔴 JANELA EXPIRADA → perguntar se quer usar o último empreendimento
+    if (empty($urls)) {
+        \Log::warning('WPP galeria: hasMedia=true mas nenhuma URL encontrada', [
+            'phone'   => $phone,
+            'payload' => array_keys($p),
+        ]);
 
-                    $ctx['gallery_ask_emp'] = (int) $lastEmp;
-                    $thread->context = $ctx;
-                    $thread->save();
+        // Deixa seguir o fluxo normal (IA) para não travar
+    } else {
+        $salvos = 0;
 
-                    $emp = \App\Models\Empreendimento::find($lastEmp);
-                    $nomeEmp = $emp?->nome ?? 'último empreendimento que você usou';
-
-                    $this->sendWppMessage(
-                        $phone,
-                        "Você quer adicionar essas mídias na galeria do empreendimento *{$nomeEmp}*?\n\n" .
-                        "Responda com *SIM* ou *NÃO*.\n\n" .
-                        "Depois é só reenviar as fotos/vídeos 🙂"
-                    );
-
-                    // não salva nada agora, espera a resposta do usuário
-                    return response()->json(['ok' => true, 'handled' => 'galeria_pergunta']);
-                }
-            } else {
-                // Nunca usou galeria / sem histórico → deixa seguir o fluxo normal
-                // (se quiser, pode mandar uma mensagem explicando)
+        foreach ($urls as $u) {
+            try {
+                // 👉 Usa exatamente a tua função auxiliar
+                $this->saveEmpreendimentoMediaFromUrl($u, (int) $empreendimentoId, (int) $corretorId);
+                $salvos++;
+            } catch (\Throwable $e) {
+                \Log::warning('WPP galeria: erro ao salvar mídia', [
+                    'phone' => $phone,
+                    'url'   => $u,
+                    'err'   => $e->getMessage(),
+                ]);
             }
         }
 
-        // Se mesmo assim não tiver empreendimento, não trata como galeria
-        if (!$empreendimentoId) {
-            // segue fluxo normal da IA
-        } else {
-
-            // 🔹 Daqui para baixo é praticamente o que você já tinha
-
-            $corretorId = $thread->user_id;
-            $salvos     = 0;
-
-            foreach ($midias as $m) {
-
-                $mediaUrl = $m['mediaUrl'];
-                $mime     = $m['mimetype'];
-
-                \Log::info("WPP galeria: baixando mídia da Z-API", [
-                    'url'            => $mediaUrl,
-                    'empreendimento' => $empreendimentoId,
-                    'corretor'       => $corretorId,
-                ]);
-
-                $contents = @file_get_contents($mediaUrl);
-                if (!$contents) {
-                    continue;
-                }
-
-                $tipo = str_contains($mime, 'video')
-                    ? 'video'
-                    : (str_contains($mime, 'image') ? 'foto' : 'outro');
-
-                $ext = match (true) {
-                    str_contains($mime, 'jpeg') => 'jpg',
-                    str_contains($mime, 'png')  => 'png',
-                    str_contains($mime, 'mp4')  => 'mp4',
-                    default                     => 'bin'
-                };
-
-                $filename = "wpp_" . now()->format('Ymd_His') . "_" . uniqid() . "." . $ext;
-                $path     = "midias/empreendimentos/{$empreendimentoId}/corretores/{$corretorId}/{$filename}";
-
-                \Storage::disk('s3')->put($path, $contents);
-
-                \App\Models\EmpreendimentoMidia::create([
-                    'empreendimento_id' => $empreendimentoId,
-                    'corretor_id'       => $corretorId,
-                    'arquivo_path'      => $path,
-                    'arquivo_tipo'      => $tipo,
-                ]);
-
-                $salvos++;
-            }
-
-            // 3) Atualiza contexto da última galeria usada
-            $ctx = $thread->context ?? [];
-            if (!is_array($ctx)) {
-                $ctx = json_decode($ctx, true) ?: [];
-            }
-
+        if ($salvos > 0) {
+            // Atualiza contexto da última galeria usada
             $ctx['last_gallery_emp_id'] = (int) $empreendimentoId;
             $ctx['last_gallery_at']     = now()->toIso8601String();
             unset($ctx['gallery_ask_emp']); // limpa qualquer pergunta pendente
@@ -419,11 +419,10 @@ if (!empty($payload['messages'])) {
             $thread->context = $ctx;
             $thread->save();
 
-            // 4) Mensagem de confirmação
             $emp = \App\Models\Empreendimento::find($empreendimentoId);
             $nomeEmp = $emp?->nome ?? 'empreendimento';
 
-            $mensagem = "✅ Salvei {$salvos} arquivo(s) na sua galeria do: {$nomeEmp}.\n\n";
+            $mensagem = "✅ Salvei {$salvos} arquivo(s) na sua galeria do: *{$nomeEmp}*.\n\n";
             $mensagem .= "🔗 Link da sua galeria:\n";
             $mensagem .= route('galeria.publica', [
                 'empreendimentoId' => $empreendimentoId,
@@ -432,12 +431,14 @@ if (!empty($payload['messages'])) {
 
             $this->sendWppMessage($phone, $mensagem);
 
-            return response()->json(['ok' => true]);
+            // IMPORTANTE: como o objetivo era só enviar mídia, podemos encerrar aqui
+            return response()->json(['ok' => true, 'handled' => 'galeria_midias_salvas']);
         }
     }
 }
-
-// ================== FIM GALERIA ==================
+// -------------------------------------------------------
+// FIM PROCESSAMENTO DE MÍDIAS
+// -------------------------------------------------------
 
 
 
@@ -4606,6 +4607,7 @@ protected function handleEmpreendimentoAssetChoice($thread, string $text, string
     // Se cair aqui, número inválido
     $this->sendWhatsAppText($phone, "Opção inválida. Me manda o número do arquivo que você quer abrir.");
 }
+
 /**
  * Baixa uma mídia da Z-API e salva no S3,
  * registrando na tabela empreendimento_midias.
