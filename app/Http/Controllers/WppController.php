@@ -356,70 +356,66 @@ if ($hasMedia) {
         return response()->json(['ok' => false, 'error' => 'sem_corretor_para_midias'], 422);
     }
 
-         // 5) Montar lista de URLs de mídia a partir do payload da Z-API
-    $urls = [];
+     // 5) Montar lista de URLs de mídia a partir do payload da Z-API
+$urls = [];
 
-    // a) Cenário simples: veio um único fileUrl na raiz
-    if (!empty($p['fileUrl']) && is_string($p['fileUrl'])) {
-        $urls[] = $p['fileUrl'];
-    }
+// a) Cenário simples: veio um único fileUrl na raiz
+if (!empty($p['fileUrl']) && is_string($p['fileUrl'])) {
+    $urls[] = $p['fileUrl'];
+}
 
-    // b) Algumas instâncias mandam um array "medias"
-    if (isset($p['medias']) && is_array($p['medias'])) {
-        foreach ($p['medias'] as $m) {
-            $u = $m['mediaUrl'] ?? $m['fileUrl'] ?? null;
-            if ($u && is_string($u)) {
-                $urls[] = $u;
-            }
+// b) Algumas instâncias mandam um array "medias"
+if (isset($p['medias']) && is_array($p['medias'])) {
+    foreach ($p['medias'] as $m) {
+        $u = $m['mediaUrl'] ?? $m['fileUrl'] ?? null;
+        if ($u && is_string($u)) {
+            $urls[] = $u;
         }
     }
+}
 
-    // c) Integrações que mandam via "messages" (Make, etc.)
-    if (!empty($p['messages']) && is_array($p['messages'])) {
-        foreach ($p['messages'] as $msg) {
-            if (!empty($msg['mimetype']) && !empty($msg['mediaUrl']) && is_string($msg['mediaUrl'])) {
-                $urls[] = $msg['mediaUrl'];
-            }
+// c) Integrações que mandam via "messages" (Make, etc.)
+if (!empty($p['messages']) && is_array($p['messages'])) {
+    foreach ($p['messages'] as $msg) {
+        if (!empty($msg['mimetype']) && !empty($msg['mediaUrl']) && is_string($msg['mediaUrl'])) {
+            $urls[] = $msg['mediaUrl'];
         }
     }
+}
 
-    // 🚫 NÃO usar mais $p['image'] como URL de mídia (está pegando foto de perfil)
-    if (!empty($p['image'])) {
-        if (is_array($p['image'])) {
-            \Log::info('WPP galeria debug image array', [
-                'phone'      => $phone,
-                'image_keys' => array_keys($p['image']),
-            ]);
-        } else {
-            \Log::info('WPP galeria debug image scalar', [
-                'phone'  => $phone,
-                'type'   => gettype($p['image']),
-                'sample' => is_string($p['image']) ? substr($p['image'], 0, 50) : null,
-            ]);
-        }
-        // não adiciona nada em $urls a partir de "image"
+/**
+ * ✅ Z-API padrão: a foto da MENSAGEM vem em image.imageUrl
+ *    https://developer.z-api.io (webhook "Ao receber")
+ */
+if (!empty($p['image']) && is_array($p['image'])) {
+    \Log::info('WPP galeria debug image array', [
+        'phone'      => $phone,
+        'image_keys' => array_keys($p['image']),
+        'image_url'  => $p['image']['imageUrl'] ?? null,
+    ]);
+
+    if (!empty($p['image']['imageUrl']) && is_string($p['image']['imageUrl'])) {
+        $urls[] = $p['image']['imageUrl'];
     }
+}
 
-    // ✅ Usar "photo" como fonte principal da mídia da mensagem
-    if (!empty($p['photo'])) {
-        if (is_array($p['photo'])) {
-            \Log::info('WPP galeria debug photo array', [
-                'phone'      => $phone,
-                'photo_keys' => array_keys($p['photo']),
-            ]);
-
-            foreach (['imageUrl', 'fileUrl', 'mediaUrl', 'url'] as $k) {
-                if (!empty($p['photo'][$k]) && is_string($p['photo'][$k])) {
-                    $urls[] = $p['photo'][$k];
-                }
-            }
-        } elseif (is_string($p['photo']) && str_starts_with($p['photo'], 'http')) {
-            $urls[] = $p['photo'];
-        }
+// 🚫 photo = avatar do usuário → NÃO salvar na galeria
+if (!empty($p['photo'])) {
+    if (is_array($p['photo'])) {
+        \Log::info('WPP galeria debug photo array (IGNORADO PARA GALERIA)', [
+            'phone'      => $phone,
+            'photo_keys' => array_keys($p['photo']),
+        ]);
+    } elseif (is_string($p['photo'])) {
+        \Log::info('WPP galeria debug photo scalar (IGNORADO PARA GALERIA)', [
+            'phone'  => $phone,
+            'sample' => substr($p['photo'], 0, 80),
+        ]);
     }
+}
 
-    // Garante que não tem lixo/duplicados
-    $urls = array_values(array_unique(array_filter($urls)));
+// Limpa duplicados
+$urls = array_values(array_unique(array_filter($urls)));
 
 
 
