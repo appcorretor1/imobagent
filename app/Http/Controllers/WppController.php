@@ -356,10 +356,10 @@ if ($hasMedia) {
         return response()->json(['ok' => false, 'error' => 'sem_corretor_para_midias'], 422);
     }
 
-    // 5) Montar lista de URLs de mídia a partir do payload da Z-API
+       // 5) Montar lista de URLs de mídia a partir do payload da Z-API
     $urls = [];
 
-    // a) Cenário simples: veio um único fileUrl
+    // a) Cenário simples: veio um único fileUrl na raiz
     if (!empty($p['fileUrl'])) {
         $urls[] = $p['fileUrl'];
     }
@@ -374,7 +374,7 @@ if ($hasMedia) {
         }
     }
 
-    // c) Se você tiver integração via "messages" (ex.: Make/bridge), trata também:
+    // c) Integrações que mandam via "messages" (Make, etc.)
     if (!empty($p['messages']) && is_array($p['messages'])) {
         foreach ($p['messages'] as $msg) {
             if (!empty($msg['mimetype']) && !empty($msg['mediaUrl'])) {
@@ -383,8 +383,54 @@ if ($hasMedia) {
         }
     }
 
+    // d) Z-API mandando direto em "image"
+    if (!empty($p['image'])) {
+        // Pode ser string ou array, vamos tratar os dois casos
+        if (is_string($p['image'])) {
+            // se já vier como URL
+            if (str_starts_with($p['image'], 'http')) {
+                $urls[] = $p['image'];
+            } else {
+                // se for base64 ou algo diferente, loga pra depurar depois
+                \Log::info('WPP galeria debug image string', [
+                    'phone' => $phone,
+                    'image_len' => strlen($p['image']),
+                    'image_sample' => substr($p['image'], 0, 50),
+                ]);
+            }
+        } elseif (is_array($p['image'])) {
+            foreach (['url', 'fileUrl', 'mediaUrl'] as $k) {
+                if (!empty($p['image'][$k]) && is_string($p['image'][$k])) {
+                    $urls[] = $p['image'][$k];
+                }
+            }
+            \Log::info('WPP galeria debug image array', [
+                'phone' => $phone,
+                'image_keys' => array_keys($p['image']),
+            ]);
+        }
+    }
+
+    // e) Algumas configs usam "photo" em vez de "image"
+    if (!empty($p['photo'])) {
+        if (is_string($p['photo']) && str_starts_with($p['photo'], 'http')) {
+            $urls[] = $p['photo'];
+        } elseif (is_array($p['photo'])) {
+            foreach (['url', 'fileUrl', 'mediaUrl'] as $k) {
+                if (!empty($p['photo'][$k]) && is_string($p['photo'][$k])) {
+                    $urls[] = $p['photo'][$k];
+                }
+            }
+            \Log::info('WPP galeria debug photo array', [
+                'phone' => $phone,
+                'photo_keys' => array_keys($p['photo']),
+            ]);
+        }
+    }
+
     // Garante que não tem lixo/duplicados
     $urls = array_values(array_unique(array_filter($urls)));
+
 
     if (empty($urls)) {
         \Log::warning('WPP galeria: hasMedia=true mas nenhuma URL encontrada', [
