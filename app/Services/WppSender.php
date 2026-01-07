@@ -11,12 +11,32 @@ class WppSender
     private string $instance;
     private string $token;
 
-    public function __construct()
-    {
-        $this->baseUrl  = rtrim(config('services.zapi.base_url'), '/');
-        $this->instance = config('services.zapi.instance');
-        $this->token    = config('services.zapi.token');
+   public function __construct()
+{
+    $this->baseUrl  = rtrim((string) config('services.zapi.base_url', ''), '/');
+    $this->instance = (string) config('services.zapi.instance', '');
+    $this->token    = (string) config('services.zapi.token', '');
+
+    if (!$this->baseUrl || !$this->instance || !$this->token) {
+        \Log::error('Z-API config ausente no WppSender', [
+            'base_url' => $this->baseUrl ?: null,
+            'instance' => $this->instance ?: null,
+            'token'    => $this->token ? '***set***' : null,
+        ]);
+
+        // Você pode lançar exceção ou só deixar o sendText retornar erro.
+        // Eu prefiro exception aqui pra não "falhar silencioso".
+        throw new \RuntimeException('Z-API não configurado (base_url/instance/token)');
     }
+
+    \Log::info('ZAPI cfg', [
+  'base_url' => config('services.zapi.base_url'),
+  'instance' => config('services.zapi.instance'),
+  'token_set' => !!config('services.zapi.token'),
+]);
+
+}
+
 
     /**
      * Envia QUALQUER arquivo do S3 como DOCUMENTO no WhatsApp.
