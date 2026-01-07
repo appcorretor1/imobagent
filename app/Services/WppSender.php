@@ -78,4 +78,30 @@ class WppSender
 
         return ['ok' => true, 'data' => $resp->json()];
     }
+
+    public function sendText(string $phone, string $message): array
+{
+    $url = "{$this->baseUrl}/instances/{$this->instance}/token/{$this->token}/send-text";
+
+    $payload = [
+        'phone'   => $phone,
+        'message' => $message,
+    ];
+
+    $resp = Http::asJson()->post($url, $payload);
+
+    if ($resp->failed()) {
+        return [
+            'ok'      => false,
+            'status'  => $resp->status(),
+            'error'   => $resp->json() ?: $resp->body(),
+            'endpoint'=> $url,
+            'payload' => $payload,
+        ];
+    }
+
+    return ['ok' => true, 'data' => $resp->json()];
+}
+
+
 }

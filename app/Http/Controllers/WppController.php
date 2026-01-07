@@ -23,6 +23,8 @@ use App\Models\User;
 use PhpOffice\PhpSpreadsheet\IOFactory;
 use App\Models\EmpreendimentoUnidade;
 use App\Models\EmpreendimentoMidia;
+use App\Services\WppSender;
+
 
 
 class WppController extends Controller
@@ -442,21 +444,19 @@ $urls = array_values(array_unique(array_filter($urls)));
             }
         }
 
-        if ($salvos > 0) {
+      if ($salvos > 0) {
 
-
- // 🔄 Mensagem de progresso (enviada no máximo 1 vez a cada 5s por corretor)
+    // 🔄 Mensagem de progresso (no máx 1x a cada 5s por telefone)
     $progressKey = "galeria:progress:{$phone}";
     if (Cache::add($progressKey, 1, now()->addSeconds(5))) {
-        // Cache::add só grava se a chave NÃO existir → ou seja, primeira msg no intervalo
         $this->sendText(
             $phone,
             "⏳ Estou salvando suas fotos e vídeos na galeria desse empreendimento.\n" .
-            "Pode continuar enviando, te aviso quando terminar de salvar. 🙂"
+            "Pode continuar enviando, vou te avisar quando terminar de salvar esse lote. 🙂"
         );
     }
 
-    // 3. Atualiza contexto da última galeria usada
+    // 1) Atualiza contexto da última galeria usada
     $ctx = $thread->context ?? [];
     if (!is_array($ctx)) {
         $ctx = json_decode($ctx, true) ?: [];
@@ -464,29 +464,31 @@ $urls = array_values(array_unique(array_filter($urls)));
 
     $ctx['last_gallery_emp_id'] = (int) $empreendimentoId;
     $ctx['last_gallery_at']     = now()->toIso8601String();
-    unset($ctx['gallery_ask_emp']); // limpa qualquer pergunta pendente
+    unset($ctx['gallery_ask_emp']);
 
     $thread->context = $ctx;
     $thread->save();
 
-    // 4. Calcula total atual de mídias na galeria
-    $totalAtual = \App\Models\EmpreendimentoMidia::where('empreendimento_id', $empreendimentoId)
-        ->where('corretor_id', $corretorId)
-        ->count();
+    // 2) Acumula o lote em cache (por phone + empreendimento + corretor)
+    $batchKey = "galeria:batch:{$phone}:{$empreendimentoId}:{$corretorId}";
 
-    $emp = \App\Models\Empreendimento::find($empreendimentoId);
-    $nomeEmp = $emp?->nome ?? 'empreendimento';
-
-    $urlGaleria = route('galeria.publica', [
-        'empreendimentoId' => $empreendimentoId,
-        'corretorId'       => $corretorId,
+    $batch = Cache::get($batchKey, [
+        'count'   => 0,
+        'last_at' => null,
     ]);
 
-    $mensagem  = "✅ Salvei *mais {$salvos} arquivo(s)* na sua galeria do: *{$nomeEmp}*.\n";
-    $mensagem .= "📸 Agora já são *{$totalAtual} arquivo(s)* salvos.\n\n";
-    $mensagem .= "🔗 Link da sua galeria:\n{$urlGaleria}";
+    $batch['count']   = ($batch['count'] ?? 0) + $salvos;
+    $batch['last_at'] = now()->toIso8601String();
 
-    $this->sendText($phone, $mensagem);
+    // guarda por uns minutos, só pra garantir
+    Cache::put($batchKey, $batch, now()->addMinutes(10));
+
+    // 3) Dispara job "debounced" para enviar o resumo
+    \App\Jobs\SendGaleriaResumoJob::dispatch(
+        $phone,
+        (int) $empreendimentoId,
+        (int) $corretorId
+    )->delay(now()->addSeconds(5));
 
     return response()->json(['ok' => true, 'handled' => 'galeria_midias_salvas']);
 }
@@ -809,12 +811,16 @@ if ($this->isMultiIndexList($text) && Cache::has($filesKey)) {
             'mime'  => $pitem['mime'] ?? null,
         ]);
 
-        $res = $this->sendMediaSmart(
-            $phone,
-            $pitem['path'] ?? '',
-            $pitem['name'] ?? '',
-            $pitem['mime'] ?? null
-        );
+       $res = $this->sendMediaSmart(
+    $phone,
+    $pitem['path'] ?? '',
+    $pitem['name'] ?? '',
+    $pitem['mime'] ?? null,
+    null,               // disk
+    (int) $companyId,
+    (int) $empId
+);
+
 
         $vias[] = $res['via'] ?? 'n/a';
 
@@ -1532,48 +1538,20 @@ protected function userCanAlterUnidades(?User $user): bool
 
     // ===== Envio WhatsApp (Z-API) =====
 
-    protected function sendText(string $phone, string $text)
-    {
-        try {
-            $instanceId  = env('ZAPI_INSTANCE_ID', '');
-            $pathToken   = env('ZAPI_PATH_TOKEN', '');
-            $clientToken = env('ZAPI_CLIENT_TOKEN', '');
-
-            $url = "https://api.z-api.io/instances/{$instanceId}/token/{$pathToken}/send-text";
-
-            $response = Http::asJson()
-                ->timeout(5) // antes era 20
-                ->withHeaders([
-                    'Content-Type' => 'application/json',
-                    'Accept'       => 'application/json',
-                    'Client-Token' => $clientToken,
-                ])
-                ->post($url, [
-                    'phone'   => $phone,
-                    'message' => $text,
-                ]);
-
-            if ($response->failed()) {
-                Log::error('Z-API erro', [
-                    'status' => $response->status(),
-                    'body'   => $response->body(),
-                    'phone'  => $phone,
-                    'text'   => $text,
-                ]);
-            } else {
-                Log::info('Mensagem enviada via Z-API', [
-                    'phone'  => $phone,
-                    'status' => $response->status(),
-                    'resp'   => $response->json(),
-                ]);
-            }
-
-            return response()->json(['sent_to'=>$phone, 'message'=>$text, 'via'=>'z-api']);
-        } catch (\Throwable $e) {
-            Log::error('Falha geral ao enviar Z-API', ['error'=>$e->getMessage(), 'phone'=>$phone]);
-            return response()->json(['error'=>true,'msg'=>$e->getMessage()],500);
-        }
+   protected function sendText(string $phone, string $text)
+{
+    // apaga o conteúdo antigo e deixa só isso:
+    try {
+        app(WppSender::class)->sendText($phone, $text);
+    } catch (\Throwable $e) {
+        Log::error('Z-API erro ao enviar texto', [
+            'phone' => $phone,
+            'msg'   => $text,
+            'err'   => $e->getMessage(),
+        ]);
     }
+}
+
 
     // ===== Fluxo normal (IA) =====
 
@@ -2585,8 +2563,11 @@ PROMPT;
     string $pathOrUrl,
     ?string $caption = null,
     ?string $mime = null,
-    ?string $disk = null
+    ?string $disk = null,
+    ?int $companyId = null,
+    ?int $empId = null
 ): array {
+
     try {
         Log::info('sendMediaSmart: start', [
             'phone'     => $phone,
@@ -2638,15 +2619,17 @@ PROMPT;
         $hook = env('MAKE_WEBHOOK_URL');
         if ($hook) {
             $payload = [
-                  "company_id" => $companyId, // ← ADICIONE ESTA LINHA
-    "empreendimento_id" => $empId, // opcional
-                'phone'    => preg_replace('/\D+/', '', $phone),
-                'url'      => $publicUrl,
-                'fileUrl'  => $publicUrl,
-                'mime'     => $mime,
-                'fileName' => $fileName,
-                'caption'  => $caption,
-            ];
+    'phone'    => preg_replace('/\D+/', '', $phone),
+    'url'      => $publicUrl,
+    'fileUrl'  => $publicUrl,
+    'mime'     => $mime,
+    'fileName' => $fileName,
+    'caption'  => $caption,
+];
+
+if ($companyId) $payload['company_id'] = $companyId;
+if ($empId)     $payload['empreendimento_id'] = $empId;
+
 
             Log::info('sendMediaSmart → Make: enviando payload', [
                 'to'      => $phone,

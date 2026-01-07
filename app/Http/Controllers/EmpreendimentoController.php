@@ -100,7 +100,6 @@ public function index(Request $request)
         'contexto_ia'          => ['nullable', 'string'],
         'texto_ia'             => ['nullable', 'string'],
 
-        // novos
         'banner_thumb'         => ['nullable', 'file', 'mimes:jpg,jpeg,png,webp'],
         'logo_path'            => ['nullable', 'file', 'mimes:jpg,jpeg,png,webp'],
     ]);
