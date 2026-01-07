@@ -10,29 +10,49 @@ class WppSender
 {
     private string $baseUrl;
     private string $instance;
-    private string $token;
+    private string $token;        // token DA INSTÂNCIA (vai no path)
+    private string $clientToken;  // client-token (vai no header)
 
     public function __construct()
     {
-        // Base oficial da Z-API
-        $this->baseUrl = 'https://api.z-api.io';
+        // Z-API base
+        $this->baseUrl = rtrim((string) config('services.zapi.base_url', 'https://api.z-api.io'), '/');
 
-        // EXATAMENTE como o painel mostra
-        $this->instance = env('ZAPI_INSTANCE_ID', '');
-        $this->token    = env('ZAPI_PATH_TOKEN', ''); // ← Token da instância
+        // ID da instância
+        $this->instance = (string) (env('ZAPI_INSTANCE_ID') ?: '');
+
+        // Token da instância (o que o painel mostra no campo "Token da instância")
+        $this->token = (string) (env('ZAPI_PATH_TOKEN') ?: '');
+
+        // Client token (o que você confirmou que precisa ir no header)
+        $this->clientToken = (string) (env('ZAPI_CLIENT_TOKEN') ?: '');
     }
 
     private function ensureConfigured(): ?array
     {
-        if (!$this->instance || !$this->token) {
-            Log::error('Z-API não configurado corretamente', [
-                'instance' => $this->instance ?: null,
-                'token_set' => (bool) $this->token,
+        if (!$this->baseUrl || !$this->instance || !$this->token || !$this->clientToken) {
+            Log::error('Z-API não configurado no WppSender', [
+                'base_url'       => $this->baseUrl ?: null,
+                'instance'       => $this->instance ?: null,
+                'token_set'      => (bool) $this->token,
+                'client_set'     => (bool) $this->clientToken,
             ]);
 
-            return ['ok' => false, 'error' => 'Z-API não configurado'];
+            return [
+                'ok' => false,
+                'error' => 'Z-API não configurado (base_url/instance/token/client_token)',
+            ];
         }
+
         return null;
+    }
+
+    private function http()
+    {
+        // ✅ Header obrigatório
+        return Http::asJson()->withHeaders([
+            'Client-Token' => $this->clientToken,
+        ]);
     }
 
     public function sendText(string $phone, string $message): array
@@ -48,19 +68,21 @@ class WppSender
             'message' => $message,
         ];
 
-        $resp = Http::asJson()->post($url, $payload);
+        $resp = $this->http()->post($url, $payload);
 
         if ($resp->failed()) {
-            Log::error('Z-API erro ao enviar texto', [
-                'status' => $resp->status(),
-                'error' => $resp->json() ?: $resp->body(),
+            Log::error('Z-API falhou ao enviar texto', [
+                'status'   => $resp->status(),
+                'error'    => $resp->json() ?: $resp->body(),
                 'endpoint' => $url,
+                'payload'  => $payload,
             ]);
 
             return [
-                'ok' => false,
-                'status' => $resp->status(),
-                'error' => $resp->json() ?: $resp->body(),
+                'ok'       => false,
+                'status'   => $resp->status(),
+                'error'    => $resp->json() ?: $resp->body(),
+                'endpoint' => $url,
             ];
         }
 
@@ -74,31 +96,53 @@ class WppSender
         }
 
         $fileName = $fileName ?: basename($s3Path);
-        $ext = strtolower(pathinfo($fileName, PATHINFO_EXTENSION));
+        $ext      = strtolower(pathinfo($fileName, PATHINFO_EXTENSION));
+
+        $allowed = [
+            // docs
+            'pdf','doc','docx','xls','xlsx','ppt','pptx','txt','csv',
+            // imagens
+            'jpg','jpeg','png','gif','webp',
+            // vídeos
+            'mp4','mov','avi','mkv',
+        ];
+
+        if (!in_array($ext, $allowed, true)) {
+            return ['ok' => false, 'error' => "Extensão .$ext não suportada para envio como documento."];
+        }
 
         $tempUrl = Storage::disk('s3')->temporaryUrl(
             $s3Path,
             now()->addMinutes($expiryMinutes),
-            ['ResponseContentDisposition' => 'inline; filename="'.$fileName.'"']
+            [
+                'ResponseContentDisposition' => 'inline; filename="' . $fileName . '"',
+            ]
         );
 
         $url = "{$this->baseUrl}/instances/{$this->instance}/token/{$this->token}/send-document/{$ext}";
 
         $payload = [
-            'phone' => $phone,
+            'phone'    => $phone,
             'document' => $tempUrl,
             'fileName' => $fileName,
         ];
 
-        $resp = Http::asJson()->post($url, $payload);
+        $resp = $this->http()->post($url, $payload);
 
         if ($resp->failed()) {
-            Log::error('Z-API erro ao enviar arquivo', [
-                'status' => $resp->status(),
-                'error' => $resp->json() ?: $resp->body(),
+            Log::error('Z-API falhou ao enviar documento', [
+                'status'   => $resp->status(),
+                'error'    => $resp->json() ?: $resp->body(),
+                'endpoint' => $url,
+                'payload'  => $payload,
             ]);
 
-            return ['ok' => false, 'error' => $resp->json() ?: $resp->body()];
+            return [
+                'ok'       => false,
+                'status'   => $resp->status(),
+                'error'    => $resp->json() ?: $resp->body(),
+                'endpoint' => $url,
+            ];
         }
 
         return ['ok' => true, 'data' => $resp->json()];
