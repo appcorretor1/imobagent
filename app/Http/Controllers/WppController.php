@@ -811,16 +811,12 @@ if ($this->isMultiIndexList($text) && Cache::has($filesKey)) {
             'mime'  => $pitem['mime'] ?? null,
         ]);
 
-       $res = $this->sendMediaSmart(
-    $phone,
-    $pitem['path'] ?? '',
-    $pitem['name'] ?? '',
-    $pitem['mime'] ?? null,
-    null,               // disk
-    (int) $companyId,
-    (int) $empId
-);
-
+        $res = $this->sendMediaSmart(
+            $phone,
+            $pitem['path'] ?? '',
+            $pitem['name'] ?? '',
+            $pitem['mime'] ?? null
+        );
 
         $vias[] = $res['via'] ?? 'n/a';
 
@@ -1537,18 +1533,29 @@ protected function userCanAlterUnidades(?User $user): bool
     }
 
     // ===== Envio WhatsApp (Z-API) =====
-
-   protected function sendText(string $phone, string $text)
+protected function sendText(string $phone, string $text): array
 {
-    // apaga o conteúdo antigo e deixa só isso:
     try {
-        app(WppSender::class)->sendText($phone, $text);
+        $res = app(\App\Services\WppSender::class)->sendText($phone, $text);
+
+        if (!($res['ok'] ?? false)) {
+            Log::error('Z-API erro ao enviar texto', [
+                'phone' => $phone,
+                'msg'   => $text,
+                'res'   => $res,
+            ]);
+        }
+
+        return $res;
+
     } catch (\Throwable $e) {
-        Log::error('Z-API erro ao enviar texto', [
+        Log::error('Z-API exception ao enviar texto', [
             'phone' => $phone,
             'msg'   => $text,
             'err'   => $e->getMessage(),
         ]);
+
+        return ['ok' => false, 'error' => $e->getMessage()];
     }
 }
 

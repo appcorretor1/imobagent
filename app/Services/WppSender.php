@@ -13,28 +13,40 @@ class WppSender
 
    public function __construct()
 {
-    $this->baseUrl  = rtrim((string) config('services.zapi.base_url', ''), '/');
-    $this->instance = (string) config('services.zapi.instance', '');
-    $this->token    = (string) config('services.zapi.token', '');
+    $this->baseUrl = rtrim((string) config('services.zapi.base_url', 'https://api.z-api.io'), '/');
 
+    // ✅ NÃO dependa só de services.php / ZAPI_INSTANCE e ZAPI_TOKEN
+    $this->instance = (string) (
+        config('services.zapi.instance')         // ZAPI_INSTANCE (se existir)
+        ?: env('ZAPI_INSTANCE_ID')               // ✅ seu .env atual
+        ?: env('ZAPI_INSTANCE')                  // fallback extra
+        ?: ''
+    );
+
+    $this->token = (string) (
+        config('services.zapi.token')            // ZAPI_TOKEN (se existir)
+        ?: config('services.zapi.client_token')  // ZAPI_CLIENT_TOKEN (já existe no services.php)
+        ?: env('ZAPI_CLIENT_TOKEN')              // ✅ seu .env atual
+        ?: env('ZAPI_PATH_TOKEN')                // ✅ seu .env atual (caso seja este)
+        ?: ''
+    );
+}
+private function ensureConfigured(): ?array
+{
     if (!$this->baseUrl || !$this->instance || !$this->token) {
-        \Log::error('Z-API config ausente no WppSender', [
+        \Log::error('Z-API não configurado no WppSender', [
             'base_url' => $this->baseUrl ?: null,
             'instance' => $this->instance ?: null,
-            'token'    => $this->token ? '***set***' : null,
+            'token_set' => (bool) $this->token,
         ]);
 
-        // Você pode lançar exceção ou só deixar o sendText retornar erro.
-        // Eu prefiro exception aqui pra não "falhar silencioso".
-        throw new \RuntimeException('Z-API não configurado (base_url/instance/token)');
+        return [
+            'ok' => false,
+            'error' => 'Z-API não configurado (base_url/instance/token)',
+        ];
     }
 
-    \Log::info('ZAPI cfg', [
-  'base_url' => config('services.zapi.base_url'),
-  'instance' => config('services.zapi.instance'),
-  'token_set' => !!config('services.zapi.token'),
-]);
-
+    return null;
 }
 
 
@@ -48,7 +60,11 @@ class WppSender
      * @param int         $expiryMinutes Validade do link temporário
      */
     public function sendFileFromS3(string $phone, string $s3Path, ?string $fileName = null, int $expiryMinutes = 10): array
-    {
+    {   
+if ($err = $this->ensureConfigured()) {
+        return $err;
+    }
+
         $fileName = $fileName ?: basename($s3Path);
         $ext      = strtolower(pathinfo($fileName, PATHINFO_EXTENSION));
 
@@ -101,6 +117,11 @@ class WppSender
 
     public function sendText(string $phone, string $message): array
 {
+
+    if ($err = $this->ensureConfigured()) {
+        return $err;
+    }
+
     $url = "{$this->baseUrl}/instances/{$this->instance}/token/{$this->token}/send-text";
 
     $payload = [
