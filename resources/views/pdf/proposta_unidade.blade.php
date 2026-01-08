@@ -9,9 +9,14 @@
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
         }
 
-        body {
+        html, body {
             margin: 0;
             padding: 0;
+            width: 100%;
+            height: 100%;
+        }
+
+        body {
             background: #f3f4f6;
             color: #111827;
             font-size: 11px;
@@ -19,8 +24,21 @@
 
         .page {
             width: 100%;
-            padding: 24px 28px;
+            padding: 0;
             background: #ffffff;
+            margin: 0;
+            box-sizing: border-box;
+            position: relative;
+        }
+
+        .page-content {
+            padding: 24px 28px;
+        }
+
+        @page {
+            margin: 0;
+            padding: 0;
+            size: A4;
         }
 
         /* HEADER */
@@ -149,15 +167,30 @@
             text-transform: uppercase;
             letter-spacing: .08em;
             color: #9ca3af;
-            margin-bottom: 2px;
             font-weight: 600;
+            padding-right: 8px;
+            white-space: nowrap;
         }
 
         .info-value {
             font-size: 12px;
             font-weight: 600;
             color: #111827;
+            text-align: right;
+        }
+
+        .info-row {
             margin-bottom: 8px;
+        }
+
+        .info-row-table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        .info-row-table td {
+            vertical-align: top;
+            padding: 0;
         }
 
         .info-value strong {
@@ -224,26 +257,55 @@
             text-transform: uppercase;
             letter-spacing: .08em;
             color: #64748b;
-            margin-bottom: 4px;
             font-weight: 600;
+            padding-right: 8px;
+            white-space: nowrap;
+            vertical-align: middle;
         }
 
         .payment-main-value {
             font-size: 22px;
             font-weight: 700;
             color: #4f46e5;
+            text-align: right;
+            vertical-align: middle;
+        }
+
+        .payment-main-table {
+            width: 100%;
+            border-collapse: collapse;
+            table-layout: fixed;
+        }
+
+        .payment-main-table td {
+            padding: 0;
+        }
+
+        .payment-main-table td:first-child {
+            width: auto;
+            white-space: nowrap;
+            padding-right: 12px;
+        }
+
+        .payment-main-table td:last-child {
+            width: 100%;
+            text-align: right;
+            padding-left: 12px;
         }
 
         .payment-table {
             width: 100%;
             border-collapse: collapse;
             margin-top: 4px;
+            margin-left: 0;
+            margin-right: 0;
         }
 
         .payment-table tr td {
             font-size: 11px;
             padding: 6px 0;
             border-bottom: 1px solid #e0e7ff;
+            vertical-align: middle;
         }
 
         .payment-table tr:last-child td {
@@ -253,13 +315,19 @@
         .payment-label {
             color: #64748b;
             font-weight: 500;
+            white-space: nowrap;
+            padding-right: 12px;
+            vertical-align: middle;
+            text-align: left;
         }
 
         .payment-value {
-            text-align: right;
+            text-align: right !important;
             font-weight: 700;
             color: #111827;
             white-space: nowrap;
+            vertical-align: middle;
+            padding-left: 12px;
         }
 
         /* WHATSAPP CHIP */
@@ -305,7 +373,7 @@
 </head>
 <body>
 <div class="page">
-
+    <div class="page-content">
     {{-- HEADER --}}
     <div class="header">
         <table class="header-table">
@@ -347,23 +415,47 @@
         <table class="two-col-table">
             <tr>
                 <td>
-                    <div class="info-label">Unidade</div>
-                    <div class="info-value">
-                        Unidade <strong>{{ $unidade }}</strong>
+                    <div class="info-row">
+                        <table class="info-row-table">
+                            <tr>
+                                <td class="info-label">Unidade</td>
+                                <td class="info-value">
+                                    Unidade <strong>{{ $unidade }}</strong>
+                                </td>
+                            </tr>
+                        </table>
                     </div>
 
-                    <div class="info-label">Torre / Bloco</div>
-                    <div class="info-value">
-                        {{ $torre ?: '—' }}
+                    <div class="info-row">
+                        <table class="info-row-table">
+                            <tr>
+                                <td class="info-label">Torre / Bloco</td>
+                                <td class="info-value">
+                                    {{ $torre ?: '—' }}
+                                </td>
+                            </tr>
+                        </table>
                     </div>
                 </td>
                 <td>
-                    <div class="info-label">Localização</div>
-                    <div class="info-value">{{ $cidadeUf ?: '—' }}</div>
+                    <div class="info-row">
+                        <table class="info-row-table">
+                            <tr>
+                                <td class="info-label">Localização</td>
+                                <td class="info-value">{{ $cidadeUf ?: '—' }}</td>
+                            </tr>
+                        </table>
+                    </div>
 
-                    <div class="info-label">Status da proposta</div>
-                    <div class="info-value">
-                        <span class="pill">Proposta em análise</span>
+                    <div class="info-row">
+                        <table class="info-row-table">
+                            <tr>
+                                <td class="info-label">Status da proposta</td>
+                                <td class="info-value">
+                                    <span class="pill">Proposta em análise</span>
+                                </td>
+                            </tr>
+                        </table>
                     </div>
                 </td>
             </tr>
@@ -410,33 +502,33 @@
             @if($linhaPrincipal)
                 <div class="payment-main">
                     @if($lpLabel && $lpValor)
-                        <div class="payment-main-label">{{ $lpLabel }}</div>
-                        <div class="payment-main-value">{{ $lpValor }}</div>
+                        <table class="payment-main-table" style="width: 100%; border-collapse: collapse;">
+                            <tr>
+                                <td class="payment-main-label" style="white-space: nowrap; padding-right: 12px; vertical-align: middle;">{{ $lpLabel }}</td>
+                                <td class="payment-main-value" style="text-align: right; white-space: nowrap; vertical-align: middle; width: 100%;">{{ $lpValor }}</td>
+                            </tr>
+                        </table>
                     @else
-                        <div class="payment-main-value">{{ $linhaPrincipal }}</div>
+                        <div class="payment-main-value" style="text-align: left;">{{ $linhaPrincipal }}</div>
                     @endif
                 </div>
             @endif
 
             @if(!empty($demaisLinhas))
-                <table class="payment-table">
+                <table class="payment-table" style="width: 100%; border-collapse: collapse;">
                     @foreach($demaisLinhas as $linha)
                         @php
                             [$label, $valor] = array_pad(explode(':', $linha, 2), 2, null);
                             $label = trim($label ?? '');
                             $valor = trim($valor ?? '');
                         @endphp
-                        <tr>
-                            <td class="payment-label">
+                        <tr style="display: table-row;">
+                            <td class="payment-label" style="white-space: nowrap; padding-right: 12px; vertical-align: middle;">
                                 {{ $label ?: $linha }}
                             </td>
-                            @if($valor !== '')
-                                <td class="payment-value">
-                                    {{ $valor }}
-                                </td>
-                            @else
-                                <td></td>
-                            @endif
+                            <td class="payment-value" style="text-align: right; white-space: nowrap; vertical-align: middle; width: 100%;">
+                                {{ $valor ?: '—' }}
+                            </td>
                         </tr>
                     @endforeach
                 </table>
@@ -451,24 +543,42 @@
         <table class="two-col-table">
             <tr>
                 <td>
-                    <div class="info-label">Corretor responsável</div>
-                    <div class="info-value">
-                        {{ $corretorNome ?: 'Equipe comercial' }}
+                    <div class="info-row">
+                        <table class="info-row-table">
+                            <tr>
+                                <td class="info-label">Corretor responsável</td>
+                                <td class="info-value">
+                                    {{ $corretorNome ?: 'Equipe comercial' }}
+                                </td>
+                            </tr>
+                        </table>
                     </div>
 
                     @if(!empty($corretorTelefone))
-                        <div class="info-label">Contato</div>
-                        <div class="info-value">
-                            {{ $corretorTelefone }}<br>
-                            <span class="whatsapp-chip">Atendimento via WhatsApp</span>
+                        <div class="info-row">
+                            <table class="info-row-table">
+                                <tr>
+                                    <td class="info-label">Contato</td>
+                                    <td class="info-value">
+                                        {{ $corretorTelefone }}<br>
+                                        <span class="whatsapp-chip">Atendimento via WhatsApp</span>
+                                    </td>
+                                </tr>
+                            </table>
                         </div>
                     @endif
                 </td>
                 <td>
-                    <div class="info-label">Observações</div>
-                    <div class="info-value" style="font-size: 10px; line-height: 1.5; color:#4b5563; font-weight: 500;">
-                        Esta proposta é ilustrativa e está sujeita à aprovação de crédito,
-                        atualização da tabela de vendas e disponibilidade da unidade.
+                    <div class="info-row">
+                        <table class="info-row-table">
+                            <tr>
+                                <td class="info-label">Observações</td>
+                                <td class="info-value" style="font-size: 10px; line-height: 1.5; color:#4b5563; font-weight: 500; text-align: left;">
+                                    Esta proposta é ilustrativa e está sujeita à aprovação de crédito,
+                                    atualização da tabela de vendas e disponibilidade da unidade.
+                                </td>
+                            </tr>
+                        </table>
                     </div>
                 </td>
             </tr>
@@ -491,6 +601,7 @@
                 </td>
             </tr>
         </table>
+    </div>
     </div>
 
 </div>

@@ -218,6 +218,12 @@
                                     Unidades
                                 </a>
 
+                                {{-- PROPOSTAS --}}
+                                <a href="{{ route('admin.propostas.index', $emp->id) }}"
+                                   class="flex-1 min-w-[120px] inline-flex items-center justify-center px-3 py-1.5 rounded text-xs font-medium border border-purple-500 text-purple-700 hover:bg-purple-50">
+                                    Propostas
+                                </a>
+
                                 {{-- EDITAR --}}
                                 <a href="{{ route('admin.empreendimentos.edit', $emp->id) }}"
                                    class="flex-1 min-w-[120px] inline-flex items-center justify-center px-3 py-1.5 rounded text-xs font-medium border border-amber-400 text-amber-700 hover:bg-amber-50">

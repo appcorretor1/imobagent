@@ -164,6 +164,20 @@ Route::middleware(['auth', 'verified', 'tenant'])
             ->whereNumber('e')
             ->whereNumber('asset');
 
+        /*
+        |--------------------------------------------------------------------------
+        | Propostas (PDFs gerados)
+        |--------------------------------------------------------------------------
+        */
+        Route::get('empreendimentos/{e}/propostas', [\App\Http\Controllers\WppController::class, 'listarPropostas'])
+            ->name('propostas.index')
+            ->whereNumber('e');
+
+        Route::get('empreendimentos/{empId}/propostas/{fileName}', [\App\Http\Controllers\WppController::class, 'visualizarProposta'])
+            ->name('propostas.visualizar')
+            ->whereNumber('empId')
+            ->where('fileName', '.*');
+
           
 
 

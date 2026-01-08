@@ -3655,7 +3655,12 @@ $html = view('pdf.proposta_unidade', [
 
 
         // === Gera o PDF ===
-        $pdf = Pdf::loadHTML($html)->setPaper('a4', 'portrait');
+        $pdf = Pdf::loadHTML($html)
+            ->setPaper('a4', 'portrait')
+            ->setOption('margin-top', 0)
+            ->setOption('margin-right', 0)
+            ->setOption('margin-bottom', 0)
+            ->setOption('margin-left', 0);
         $pdfContent = $pdf->output();
 
         // === Caminho no S3 ===
@@ -4524,6 +4529,98 @@ Financiamento: R$ 481.385,75
         'corretorNome'       => $corretor->name,
         'corretorTelefone'   => $corretor->phone,
     ]);
+}
+
+/**
+ * Lista todas as propostas de um empreendimento
+ */
+public function listarPropostas(int $empId)
+{
+    $empreendimento = \App\Models\Empreendimento::find($empId);
+    
+    if (!$empreendimento) {
+        abort(404, 'Empreendimento não encontrado');
+    }
+
+    // Verifica permissão (mesmo middleware que outras rotas admin)
+    abort_unless(auth()->check(), 403);
+
+    $companyId = $empreendimento->company_id ?? auth()->user()->company_id ?? 1;
+    $prefix = "documentos/tenants/{$companyId}/empreendimentos/{$empId}/propostas/";
+    
+    $disk = \Illuminate\Support\Facades\Storage::disk('s3');
+    $files = $disk->files($prefix);
+    
+    // Filtra apenas PDFs
+    $propostas = array_filter($files, function($path) {
+        return strtolower(pathinfo($path, PATHINFO_EXTENSION)) === 'pdf';
+    });
+    
+    // Ordena por data (mais recente primeiro) e formata
+    $propostasFormatadas = [];
+    foreach ($propostas as $path) {
+        $fileName = basename($path);
+        // Extrai informações do nome: proposta_{empId}_u{unidade}_{torre}_{timestamp}.pdf
+        if (preg_match('/proposta_(\d+)_u(\d+)_(.+?)_(\d+)\.pdf$/', $fileName, $matches)) {
+            $propostasFormatadas[] = [
+                'path' => $path,
+                'nome' => $fileName,
+                'unidade' => $matches[2],
+                'torre' => str_replace('_', ' ', $matches[3]),
+                'timestamp' => (int)$matches[4],
+                'data' => date('d/m/Y H:i', (int)$matches[4]),
+            ];
+        } else {
+            // Fallback para arquivos com formato diferente
+            $propostasFormatadas[] = [
+                'path' => $path,
+                'nome' => $fileName,
+                'unidade' => '?',
+                'torre' => '?',
+                'timestamp' => filemtime($path) ?? time(),
+                'data' => date('d/m/Y H:i'),
+            ];
+        }
+    }
+    
+    // Ordena por timestamp (mais recente primeiro)
+    usort($propostasFormatadas, function($a, $b) {
+        return $b['timestamp'] - $a['timestamp'];
+    });
+    
+    return view('admin.propostas.index', [
+        'empreendimento' => $empreendimento,
+        'propostas' => $propostasFormatadas,
+    ]);
+}
+
+/**
+ * Visualiza ou baixa uma proposta específica
+ */
+public function visualizarProposta(int $empId, string $fileName)
+{
+    $empreendimento = \App\Models\Empreendimento::find($empId);
+    
+    if (!$empreendimento) {
+        abort(404, 'Empreendimento não encontrado');
+    }
+
+    // Verifica permissão
+    abort_unless(auth()->check(), 403);
+
+    $companyId = $empreendimento->company_id ?? auth()->user()->company_id ?? 1;
+    $path = "documentos/tenants/{$companyId}/empreendimentos/{$empId}/propostas/{$fileName}";
+    
+    $disk = \Illuminate\Support\Facades\Storage::disk('s3');
+    
+    if (!$disk->exists($path)) {
+        abort(404, 'Proposta não encontrada');
+    }
+    
+    // Gera URL temporária (válida por 10 minutos)
+    $url = $disk->temporaryUrl($path, now()->addMinutes(10));
+    
+    return redirect()->away($url);
 }
 
 
