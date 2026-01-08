@@ -210,6 +210,7 @@ if ($message !== '' && stripos($message, 'arquiv') !== false) {
     private function buildList(int $companyId, string $phone): array
     {
         $emps = Empreendimento::where('company_id', $companyId)
+            ->where('ativo', 1)
             ->orderBy('nome')->get(['id','nome']);
 
         if ($emps->isEmpty()) {

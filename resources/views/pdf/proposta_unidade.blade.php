@@ -4,9 +4,15 @@
     <meta charset="UTF-8">
     <title>Proposta - {{ $empreendimentoNome }}</title>
     <style>
+        @import url('https://fonts.googleapis.com/css2?family=Urbanist:wght@300;400;500;600;700;800;900&display=swap');
+
         * {
             box-sizing: border-box;
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            font-family: "Urbanist", "DejaVu Sans", sans-serif;
+        }
+
+        body {
+            font-family: "Urbanist", "DejaVu Sans", sans-serif;
         }
 
         html, body {
@@ -299,6 +305,13 @@
             margin-top: 4px;
             margin-left: 0;
             margin-right: 0;
+            display: table;
+            table-layout: auto;
+        }
+
+        .payment-table tr {
+            display: table-row;
+            width: 100%;
         }
 
         .payment-table tr td {
@@ -306,6 +319,7 @@
             padding: 6px 0;
             border-bottom: 1px solid #e0e7ff;
             vertical-align: middle;
+            display: table-cell;
         }
 
         .payment-table tr:last-child td {
@@ -319,6 +333,7 @@
             padding-right: 12px;
             vertical-align: middle;
             text-align: left;
+            width: auto;
         }
 
         .payment-value {
@@ -328,6 +343,7 @@
             white-space: nowrap;
             vertical-align: middle;
             padding-left: 12px;
+            width: 100%;
         }
 
         /* WHATSAPP CHIP */
@@ -516,21 +532,23 @@
 
             @if(!empty($demaisLinhas))
                 <table class="payment-table" style="width: 100%; border-collapse: collapse;">
+                    <tbody>
                     @foreach($demaisLinhas as $linha)
                         @php
                             [$label, $valor] = array_pad(explode(':', $linha, 2), 2, null);
                             $label = trim($label ?? '');
                             $valor = trim($valor ?? '');
                         @endphp
-                        <tr style="display: table-row;">
-                            <td class="payment-label" style="white-space: nowrap; padding-right: 12px; vertical-align: middle;">
+                        <tr>
+                            <td style="font-size: 11px; padding: 6px 0; border-bottom: 1px solid #e0e7ff; vertical-align: middle; color: #64748b; font-weight: 500; white-space: nowrap; padding-right: 12px; text-align: left; width: 1%;">
                                 {{ $label ?: $linha }}
                             </td>
-                            <td class="payment-value" style="text-align: right; white-space: nowrap; vertical-align: middle; width: 100%;">
+                            <td style="font-size: 11px; padding: 6px 0; border-bottom: 1px solid #e0e7ff; vertical-align: middle; text-align: right; font-weight: 700; color: #111827; white-space: nowrap; padding-left: 12px; width: 99%;">
                                 {{ $valor ?: '—' }}
                             </td>
                         </tr>
                     @endforeach
+                    </tbody>
                 </table>
             @endif
         </div>

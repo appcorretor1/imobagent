@@ -178,6 +178,17 @@ Route::middleware(['auth', 'verified', 'tenant'])
             ->whereNumber('empId')
             ->where('fileName', '.*');
 
+        /*
+        |--------------------------------------------------------------------------
+        | Chat Simulador (Simula conversas do WhatsApp)
+        |--------------------------------------------------------------------------
+        */
+        Route::get('chat-simulator', [\App\Http\Controllers\ChatSimulatorController::class, 'index'])
+            ->name('chat-simulator.index');
+
+        Route::post('chat-simulator/send', [\App\Http\Controllers\ChatSimulatorController::class, 'sendMessage'])
+            ->name('chat-simulator.send');
+
           
 
 

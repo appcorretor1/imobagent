@@ -74,6 +74,16 @@
                         class="{{ $navText }} {{ $navHover }} font-medium">
                         Meus empreendimentos
                     </x-nav-link>
+
+                    {{-- Chat Simulador --}}
+                    @if(in_array($role, ['super_admin','diretor','gerente']))
+                        <x-nav-link 
+                            :href="route('admin.chat-simulator.index')"
+                            :active="request()->routeIs('admin.chat-simulator.*')"
+                            class="{{ $navText }} {{ $navHover }} font-medium">
+                            Chat Simulador
+                        </x-nav-link>
+                    @endif
                 </div>
             </div>
 
@@ -186,6 +196,16 @@
                 class="{{ $navText }}">
                 Meus empreendimentos
             </x-responsive-nav-link>
+
+            {{-- Chat Simulador (mobile) --}}
+            @if(in_array($role, ['super_admin','diretor','gerente']))
+                <x-responsive-nav-link 
+                    :href="route('admin.chat-simulator.index')" 
+                    :active="request()->routeIs('admin.chat-simulator.*')"
+                    class="{{ $navText }}">
+                    Chat Simulador
+                </x-responsive-nav-link>
+            @endif
 
         </div>
 

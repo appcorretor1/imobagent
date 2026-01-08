@@ -581,27 +581,13 @@ if (!empty($text) && isset($ctx['gallery_ask_emp'])) {
 }
 
 
-        // ===== MENU DE ATALHOS =====
-if ($this->isShortcutMenuCommand($norm)) {
-    $menuText = $this->buildShortcutMenuText($thread);
 
-    // marca no contexto que o último comando foi "menu" (pra interpretar 1 / 2 depois)
-    $ctx = $thread->context ?? [];
-    $ctx['shortcut_menu'] = [
-        'shown_at' => now()->toIso8601String(),
-    ];
-    $thread->context = $ctx;
-    $thread->save();
-
-    return $this->sendText($phone, $menuText);
-}
-
-// ===== TRATAR RESPOSTA AO MENU (1 / 2) =====
-if (!empty(data_get($ctx, 'shortcut_menu.shown_at')) && preg_match('/^\s*[12]\s*$/', $norm)) {
+// ===== TRATAR RESPOSTA AO MENU (1-8) =====
+if (!empty(data_get($ctx, 'shortcut_menu.shown_at')) && preg_match('/^\s*[1-8]\s*$/', $norm)) {
     $option = trim($norm);
 
-    // se ainda não escolheu empreendimento, não adianta
-    if (empty($thread->selected_empreendimento_id)) {
+    // se ainda não escolheu empreendimento, não adianta (exceto opções que não precisam)
+    if (empty($thread->selected_empreendimento_id) && !in_array($option, ['0'])) {
         // limpa flag de menu
         $ctx = $thread->context ?? [];
         unset($ctx['shortcut_menu']);
@@ -620,24 +606,89 @@ if (!empty(data_get($ctx, 'shortcut_menu.shown_at')) && preg_match('/^\s*[12]\s*
     $thread->context = $ctx;
     $thread->save();
 
+    $empId = (int) $thread->selected_empreendimento_id;
+
     // 1 → atalho para "ver arquivos"
     if ($option === '1') {
-        // simplesmente reaproveita a lógica já existente, fingindo que ele digitou "ver arquivos"
         $text = 'ver arquivos';
         $norm = $this->normalizeText($text);
         // NÃO dá return aqui, deixa seguir o fluxo até o SUPER HARD-GATE ARQUIVOS
     }
-
-    // 2 → atalho para "quais unidades livres"
-    if ($option === '2') {
-        $empId = (int) $thread->selected_empreendimento_id;
+    // 2 → instrução para solicitar arquivos
+    elseif ($option === '2') {
+        return $this->sendText(
+            $phone,
+            "Para solicitar arquivos, primeiro diga: *ver arquivos*\n" .
+            "Depois responda com os números dos arquivos que deseja (ex: 1,2,5)" . 
+            $this->footerControls()
+        );
+    }
+    // 3 → atalho para "quais unidades livres"
+    elseif ($option === '3') {
         $answer = $this->handleUnidadesPergunta($empId, $this->normalizeText('quais unidades livres'));
-
         if ($answer !== null) {
             return $this->sendText($phone, $answer . $this->footerControls());
         }
-
-        // se por algum motivo não achar, deixa cair no fluxo normal de IA
+    }
+    // 4 → instrução para consultar pagamento
+    elseif ($option === '4') {
+        return $this->sendText(
+            $phone,
+            "Para consultar informações de pagamento, pergunte algo como:\n" .
+            "• *pagamento unidade 301 torre 5*\n" .
+            "• *informações de pagamento unidade 2201*\n" .
+            "• *tabela unidade 101*" .
+            $this->footerControls()
+        );
+    }
+    // 5 → instrução para gerar proposta
+    elseif ($option === '5') {
+        return $this->sendText(
+            $phone,
+            "Para gerar proposta em PDF, pergunte algo como:\n" .
+            "• *proposta unidade 301 torre 5*\n" .
+            "• *gerar proposta unidade 2201*\n" .
+            "• *proposta PDF unidade 101*" .
+            $this->footerControls()
+        );
+    }
+    // 6 → instrução para atualizar status
+    elseif ($option === '6') {
+        return $this->sendText(
+            $phone,
+            "Para atualizar status de unidades, envie algo como:\n" .
+            "• *unidade 301 torre 5 vendida*\n" .
+            "• *unidade 2201 reservada*\n" .
+            "• *unidade 101 livre*" .
+            $this->footerControls()
+        );
+    }
+    // 7 → instrução para galeria
+    elseif ($option === '7') {
+        return $this->sendText(
+            $phone,
+            "Para adicionar fotos/vídeos na galeria:\n" .
+            "1. Selecione o empreendimento (se ainda não selecionou)\n" .
+            "2. Envie as fotos/vídeos aqui mesmo\n" .
+            "3. Confirme quando perguntado\n\n" .
+            "As mídias serão salvas automaticamente na galeria do empreendimento selecionado." .
+            $this->footerControls()
+        );
+    }
+    // 8 → instrução para perguntas
+    elseif ($option === '8') {
+        return $this->sendText(
+            $phone,
+            "Você pode fazer qualquer pergunta sobre o empreendimento!\n\n" .
+            "Exemplos:\n" .
+            "• *qual endereço do empreendimento?*\n" .
+            "• *quais as amenidades?*\n" .
+            "• *qual o preço base?*\n" .
+            "• *onde fica localizado?*\n" .
+            "• *quais os diferenciais?*\n\n" .
+            "A IA vai consultar os documentos e informações do empreendimento para responder." .
+            $this->footerControls()
+        );
     }
 }
 // ===== FIM RESPOSTA AO MENU =====
@@ -991,6 +1042,37 @@ if (!empty($thread->selected_empreendimento_id) && $this->isMultiIndexList($text
             "Eu listo e você responde com os números (ex.: 1,2,5)." . $this->footerControls()
         );
     }
+}
+
+        // ===== RESUMO (sempre disponível) - ANTES DE QUALQUER PROCESSAMENTO DE IA =====
+if ($this->isResumoCommand($norm)) {
+    $resumoText = $this->buildResumoText($thread);
+    return $this->sendText($phone, $resumoText);
+}
+
+        // ===== MENU DE ATALHOS (só com empreendimento selecionado) - ANTES DE QUALQUER PROCESSAMENTO DE IA =====
+if ($this->isShortcutMenuCommand($norm)) {
+    // Menu só funciona se tiver empreendimento selecionado
+    if (empty($thread->selected_empreendimento_id)) {
+        return $this->sendText(
+            $phone,
+            "⚠️ Para acessar o menu, primeiro selecione um empreendimento.\n\n" .
+            "Digite *mudar empreendimento* para ver a lista de empreendimentos disponíveis." .
+            $this->footerControls()
+        );
+    }
+    
+    $menuText = $this->buildShortcutMenuText($thread);
+
+    // marca no contexto que o último comando foi "menu" (pra interpretar 1-8 depois)
+    $ctx = $thread->context ?? [];
+    $ctx['shortcut_menu'] = [
+        'shown_at' => now()->toIso8601String(),
+    ];
+    $thread->context = $ctx;
+    $thread->save();
+
+    return $this->sendText($phone, $menuText);
 }
 
         // ===== MODO CATÁLOGO: perguntar sobre TODOS os empreendimentos (usando texto_ia) =====
@@ -1372,11 +1454,9 @@ protected function userCanAlterUnidades(?User $user): bool
 {
     $q = Empreendimento::query();
 
-    // Se tiver coluna 'ativo', respeita
+    // Se tiver coluna 'ativo', filtra apenas os ATIVOS
     if (Schema::hasColumn('empreendimentos','ativo')) {
-        $q->where(function ($qq) {
-            $qq->where('ativo', 1)->orWhere('ativo', true);
-        });
+        $q->where('ativo', 1);
     }
 
     // 🔐 Filtrar por empresa (tenant) com base na thread/corretor
@@ -2103,9 +2183,24 @@ protected function looksLikeProposalRequest(string $question): bool
     protected function answerFromTextoIa(Empreendimento $e, string $question): ?string
     {
         $context = trim((string) $e->texto_ia);
+        
+        // Monta informações básicas do banco de dados
+        $dadosBasicos = [];
+        if (!empty($e->nome)) $dadosBasicos[] = "Nome: {$e->nome}";
+        if (!empty($e->endereco)) $dadosBasicos[] = "Endereço: {$e->endereco}";
+        if (!empty($e->cidade)) $dadosBasicos[] = "Cidade: {$e->cidade}";
+        if (!empty($e->uf)) $dadosBasicos[] = "UF: {$e->uf}";
+        if (!empty($e->cep)) $dadosBasicos[] = "CEP: {$e->cep}";
+        if (!empty($e->tipologia)) $dadosBasicos[] = "Tipologia: {$e->tipologia}";
+        if (!empty($e->metragem)) $dadosBasicos[] = "Metragem: {$e->metragem}";
+        if (!empty($e->preco_base)) $dadosBasicos[] = "Preço base: R$ " . number_format($e->preco_base, 2, ',', '.');
+        if (!empty($e->descricao)) $dadosBasicos[] = "Descrição: {$e->descricao}";
+        
+        $dadosBasicosStr = !empty($dadosBasicos) ? implode("\n", $dadosBasicos) : '';
 
-        if ($context === '') {
-            return null; // não tem nada cadastrado, deixa cair pro Vector Store
+        // Se não tem texto_ia E não tem dados básicos, deixa cair pro Vector Store
+        if ($context === '' && $dadosBasicosStr === '') {
+            return null;
         }
 
         try {
@@ -2117,8 +2212,11 @@ Você é um assistente para corretores de imóveis.
 Use APENAS as informações abaixo sobre o empreendimento para responder.
 Se a resposta não estiver claramente nessas informações, responda exatamente: "NAO_SEI".
 
-### INFORMAÇÕES DO EMPREENDIMENTO
-$context
+### INFORMAÇÕES BÁSICAS DO EMPREENDIMENTO (do banco de dados)
+{$dadosBasicosStr}
+
+### INFORMAÇÕES ADICIONAIS DO EMPREENDIMENTO (texto_ia)
+{$context}
 
 ### PERGUNTA DO CORRETOR
 $question
@@ -4408,29 +4506,123 @@ protected function changeUnitStatus(int $empreendimentoId, string $msg): ?string
 protected function isShortcutMenuCommand(string $norm): bool
 {
     // $norm já vem minúsculo e sem acento
-    return Str::contains($norm, 'menu');
+    // Verifica se é EXATAMENTE "menu" (com ou sem espaços extras)
+    // Isso evita que "resumo" ou outras palavras contenham "menu" sejam capturadas
+    $trimmed = trim($norm);
+    return $trimmed === 'menu';
 }
 
 protected function buildShortcutMenuText(WhatsappThread $thread): string
 {
     $hasEmp = !empty($thread->selected_empreendimento_id);
 
-    //ADICIONAR ITENS NO MENU
-
-    $txt  = "📋 *Menu rápido*\n\n";
-    $txt .= "1️⃣ Ver arquivos do empreendimento\n";
-    $txt .= "2️⃣ Consultar unidades livres\n\n";
-    //$txt .= "3️⃣ Ver tabela de preços\n";
-    //$txt .= "4️⃣
-
-    if (!$hasEmp) {
-        $txt .= "_Antes, selecione um empreendimento enviando o número na lista._";
+    $txt  = "📋 *Menu de Atalhos*\n\n";
+    
+    // Opções sempre disponíveis
+    $txt .= "🔄 *Mudar empreendimento*\n";
+    $txt .= "➕ *Criar empreendimento*\n\n";
+    
+    if ($hasEmp) {
+        // Opções que requerem empreendimento selecionado
+        $txt .= "📁 *Arquivos e Documentos*\n";
+        $txt .= "1️⃣ Ver arquivos do empreendimento\n";
+        $txt .= "2️⃣ Solicitar arquivos por número (ex: 1,2,5)\n\n";
+        
+        $txt .= "🏢 *Unidades*\n";
+        $txt .= "3️⃣ Consultar unidades livres\n";
+        $txt .= "4️⃣ Consultar informações de pagamento de unidade\n";
+        $txt .= "5️⃣ Gerar proposta em PDF de unidade\n";
+        $txt .= "6️⃣ Atualizar status de unidades\n\n";
+        
+        $txt .= "📸 *Galeria*\n";
+        $txt .= "7️⃣ Enviar fotos/vídeos para galeria\n\n";
+        
+        $txt .= "❓ *Perguntas*\n";
+        $txt .= "8️⃣ Fazer pergunta sobre o empreendimento\n\n";
+        
+        $txt .= "💡 *Dicas*\n";
+        $txt .= "• Digite o número da opção (ex: 1, 3, 5)\n";
+        $txt .= "• Ou escreva o comando diretamente\n";
+        $txt .= "• Exemplos:\n";
+        $txt .= "  - *ver arquivos*\n";
+        $txt .= "  - *quais unidades livres?*\n";
+        $txt .= "  - *pagamento unidade 301 torre 5*\n";
+        $txt .= "  - *proposta unidade 2201*\n";
+        $txt .= "  - *qual endereço do empreendimento?*";
     } else {
-        $txt .= "Envie o número da opção ou escreva o comando, por exemplo:\n";
-        $txt .= "- *ver arquivos*\n";
-        $txt .= "- *quais unidades livres?*";
+        $txt .= "_⚠️ Para usar as opções abaixo, primeiro selecione um empreendimento._\n\n";
+        $txt .= "📁 *Arquivos e Documentos*\n";
+        $txt .= "1️⃣ Ver arquivos do empreendimento\n";
+        $txt .= "2️⃣ Solicitar arquivos por número\n\n";
+        
+        $txt .= "🏢 *Unidades*\n";
+        $txt .= "3️⃣ Consultar unidades livres\n";
+        $txt .= "4️⃣ Consultar informações de pagamento\n";
+        $txt .= "5️⃣ Gerar proposta em PDF\n";
+        $txt .= "6️⃣ Atualizar status de unidades\n\n";
+        
+        $txt .= "📸 *Galeria*\n";
+        $txt .= "7️⃣ Enviar fotos/vídeos\n\n";
+        
+        $txt .= "❓ *Perguntas*\n";
+        $txt .= "8️⃣ Fazer pergunta sobre empreendimento";
     }
 
+    return $txt . $this->footerControls();
+}
+
+/**
+ * Detecta se é comando de resumo
+ */
+protected function isResumoCommand(string $norm): bool
+{
+    return Str::contains($norm, 'resumo');
+}
+
+/**
+ * Monta texto de resumo (visão geral do sistema)
+ */
+protected function buildResumoText(WhatsappThread $thread): string
+{
+    $hasEmp = !empty($thread->selected_empreendimento_id);
+    $empId = (int) $thread->selected_empreendimento_id;
+    
+    $txt = "📊 *Resumo do Sistema*\n\n";
+    
+    if ($hasEmp && $empId > 0) {
+        $e = Empreendimento::find($empId);
+        if ($e) {
+            $txt .= "🏢 *Empreendimento Selecionado:*\n";
+            $txt .= "• {$e->nome}\n";
+            if ($e->cidade) $txt .= "• {$e->cidade}";
+            if ($e->uf) $txt .= "/{$e->uf}";
+            if ($e->cidade || $e->uf) $txt .= "\n";
+            if ($e->endereco) $txt .= "• {$e->endereco}\n";
+            $txt .= "\n";
+        }
+    } else {
+        $txt .= "⚠️ *Nenhum empreendimento selecionado*\n\n";
+    }
+    
+    $txt .= "📋 *Comandos Disponíveis:*\n\n";
+    $txt .= "🔄 *Mudar empreendimento* - Ver lista de empreendimentos\n";
+    $txt .= "➕ *Criar empreendimento* - Criar novo empreendimento de revenda\n";
+    $txt .= "📋 *Menu* - Ver menu completo (requer empreendimento selecionado)\n\n";
+    
+    if ($hasEmp) {
+        $txt .= "📁 *Ver arquivos* - Listar arquivos do empreendimento\n";
+        $txt .= "🏢 *Unidades livres* - Consultar disponibilidade\n";
+        $txt .= "💰 *Pagamento unidade X* - Ver informações de pagamento\n";
+        $txt .= "📄 *Proposta unidade X* - Gerar PDF da proposta\n";
+        $txt .= "📸 *Enviar fotos* - Adicionar mídias na galeria\n";
+        $txt .= "❓ *Perguntas* - Fazer perguntas sobre o empreendimento\n\n";
+        
+        $txt .= "💡 Digite *menu* para ver todas as opções detalhadas.";
+    } else {
+        $txt .= "💡 Selecione um empreendimento para ver mais opções.\n";
+        $txt .= "Digite *mudar empreendimento* para começar.";
+    }
+    
     return $txt . $this->footerControls();
 }
 

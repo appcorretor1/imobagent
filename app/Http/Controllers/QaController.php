@@ -27,12 +27,34 @@ class QaController extends Controller
     // GET: /admin/empreendimentos/{empreendimento}/perguntar
     public function askForm(Empreendimento $empreendimento)
     {
-       return view('admin.qa.ask', [
-    'empreendimento' => $empreendimento,
-    'answer' => null,
-    'question' => null,
-]);
-
+        $user = auth()->user();
+        $threadKey = "admin:thread:{$user->id}:{$empreendimento->id}";
+        $threadId = Cache::get($threadKey);
+        
+        $messages = [];
+        
+        if ($threadId) {
+            try {
+                $client = OpenAI::client(config('services.openai.key'));
+                $msgs = $client->threads()->messages()->list($threadId, ['limit' => 50, 'order' => 'asc']);
+                $messages = $msgs->data;
+            } catch (\Exception $e) {
+                Log::warning('QA: Erro ao buscar mensagens da thread', [
+                    'threadId' => $threadId,
+                    'error' => $e->getMessage(),
+                ]);
+            }
+        }
+        
+        // Se veio mensagens via session (redirect), usa elas
+        if (session('messages')) {
+            $messages = session('messages');
+        }
+        
+        return view('admin.qa.chat', [
+            'e' => $empreendimento,
+            'messages' => $messages,
+        ]);
     }
 
     // POST: /admin/empreendimentos/{empreendimento}/perguntar
@@ -42,10 +64,10 @@ class QaController extends Controller
         VectorStoreService $svc
     ) {
         $data = $request->validate([
-            'question' => ['required','string','min:2'],
+            'q' => ['required','string','min:2'], // A view chat envia 'q', não 'question'
         ]);
 
-        $question = trim($data['question']);
+        $question = trim($data['q']);
 
         try {
             // Garante Vector Store e Assistant
@@ -82,42 +104,29 @@ class QaController extends Controller
                 $run = $client->threads()->runs()->retrieve($threadId, $run->id);
             } while (in_array($run->status, ['queued','in_progress','cancelling']));
 
-            $answer = '';
-            if ($run->status === 'completed') {
-                $msgs = $client->threads()->messages()->list($threadId, ['limit' => 10]);
-                foreach ($msgs->data as $m) {
-                    if ($m->role === 'assistant') {
-                        foreach ($m->content as $c) {
-                            if ($c->type === 'text') {
-                                $answer = $c->text->value;
-                                break 2;
-                            }
-                        }
-                    }
-                }
-            } else {
+            // Busca todas as mensagens para retornar
+            $msgs = $client->threads()->messages()->list($threadId, ['limit' => 50, 'order' => 'asc']);
+            
+            if ($run->status !== 'completed') {
                 Log::warning('QA run not completed', [
                     'status' => $run->status,
                     'empId'  => $empreendimento->id
                 ]);
             }
 
-            return view('admin.qa.ask', [
-                'empreendimento' => $empreendimento,
-                'answer'         => $answer !== '' ? $answer : 'Não consegui responder agora. Pode tentar novamente?',
-                'question'       => $question,
-            ]);
+            // Redireciona de volta para a view chat com as mensagens atualizadas
+            return redirect()->route('admin.qa.form', $empreendimento)
+                ->with('messages', $msgs->data);
+                
         } catch (\Throwable $e) {
             Log::error('QA askSubmit error', [
                 'empId' => $empreendimento->id,
                 'err'   => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
             ]);
 
-            return view('admin.qa.ask', [
-                'empreendimento' => $empreendimento,
-                'answer'         => 'Tive um problema ao consultar os arquivos do empreendimento. Tente novamente em instantes.',
-                'question'       => $question,
-            ]);
+            return redirect()->route('admin.qa.form', $empreendimento)
+                ->with('error', 'Tive um problema ao consultar os arquivos do empreendimento. Tente novamente em instantes.');
         }
     }
 

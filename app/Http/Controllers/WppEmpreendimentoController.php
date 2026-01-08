@@ -35,8 +35,9 @@ class WppEmpreendimentoController extends Controller
             return response()->json(['ok'=>false,'error'=>'no_company_bound'], 404);
         }
 
-        // 2) Carrega empreendimentos da empresa
+        // 2) Carrega empreendimentos da empresa (apenas ATIVOS)
         $emps = Empreendimento::where('company_id', $companyId)
+            ->where('ativo', 1)
             ->orderBy('nome')
             ->get(['id','nome']);
 
