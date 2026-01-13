@@ -1,0 +1,26 @@
+{
+    "urbanist": {
+        "normal": "\/Applications\/XAMPP\/xamppfiles\/htdocs\/app_ia\/storage\/fonts\/urbanist_normal_9b3f5be80a572eb4224d573e16e772f9",
+        "500": "\/Applications\/XAMPP\/xamppfiles\/htdocs\/app_ia\/storage\/fonts\/urbanist_500_b4af937642be85870af95fce929aa366",
+        "600": "\/Applications\/XAMPP\/xamppfiles\/htdocs\/app_ia\/storage\/fonts\/urbanist_600_3a8f5cdf1e14cfb39a9b80650dd5fd09",
+        "bold": "\/Applications\/XAMPP\/xamppfiles\/htdocs\/app_ia\/storage\/fonts\/urbanist_bold_f7a7a17a0b3cfeb99c000de07317abc5",
+        "800": "urbanist_800_6d341669e94f82212bc5a8a4a0ae83cb"
+    },
+    "font awesome 6 brands": {
+        "normal": "font_awesome_6_brands_normal_36faa0e194d3288643f7144dedd8e1b1"
+    },
+    "font awesome 6 free": {
+        "normal": "\/Applications\/XAMPP\/xamppfiles\/htdocs\/app_ia\/storage\/fonts\/font_awesome_6_free_normal_cf2d7daaeabedac0226ae26fc7e4f075",
+        "900": "font_awesome_6_free_900_665c8d2ea728525da852b5cd3a1d51a5"
+    },
+    "font awesome 5 brands": {
+        "normal": "font_awesome_5_brands_normal_36faa0e194d3288643f7144dedd8e1b1"
+    },
+    "font awesome 5 free": {
+        "900": "\/Applications\/XAMPP\/xamppfiles\/htdocs\/app_ia\/storage\/fonts\/font_awesome_5_free_900_665c8d2ea728525da852b5cd3a1d51a5",
+        "normal": "font_awesome_5_free_normal_cf2d7daaeabedac0226ae26fc7e4f075"
+    },
+    "fontawesome": {
+        "normal": "fontawesome_normal_6aa5cc0b95be2651581a2d7ad4a9d038"
+    }
+}

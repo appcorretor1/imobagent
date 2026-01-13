@@ -20,7 +20,7 @@
 
 
     <div class="logo-cliente">
-<img src="https://mzninc.com.br/wp-content/uploads/2023/05/logo-mzn.png"style="
+<img src="https://app-ia-corretor.s3.eu-north-1.amazonaws.com/companies/1/logo.png"style="
     width: 50%;
 ">
 </div>

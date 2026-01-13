@@ -223,10 +223,18 @@ class ChatSimulatorController extends Controller
                 'captured_count' => count($this->capturedResponses),
             ]);
             
-            // Pega a última resposta capturada
+            // Pega todas as respostas capturadas (pode haver múltiplas, ex: PDF + mensagem de confirmação)
             if (!empty($this->capturedResponses)) {
-                $responseText = end($this->capturedResponses);
-                Log::info('Chat Simulator: Usando resposta capturada', [
+                // Se houver múltiplas respostas, junta todas (ex: link do PDF + mensagem de confirmação)
+                if (count($this->capturedResponses) > 1) {
+                    $responseText = implode("\n\n", $this->capturedResponses);
+                    Log::info('Chat Simulator: Múltiplas respostas capturadas, concatenando', [
+                        'count' => count($this->capturedResponses),
+                    ]);
+                } else {
+                    $responseText = $this->capturedResponses[0];
+                }
+                Log::info('Chat Simulator: Usando resposta(s) capturada(s)', [
                     'count' => count($this->capturedResponses),
                     'text_preview' => substr($responseText, 0, 100),
                 ]);
@@ -311,6 +319,87 @@ class ChatSimulatorController extends Controller
                     $this->simulator->captureResponse($text);
                     return ['ok' => true, 'simulated' => true];
                 }
+                
+                protected function sendMediaSmart(string $phone, string $pathOrUrl, string $caption = '', ?string $mime = null, string $disk = 's3'): array
+                {
+                    Log::info('Chat Simulator: sendMediaSmart chamado (simulado)', [
+                        'path' => substr($pathOrUrl, 0, 100),
+                        'caption' => substr($caption, 0, 50),
+                        'mime' => $mime,
+                        'disk' => $disk,
+                    ]);
+                    
+                    try {
+                        // Resolve URL pública do arquivo
+                        $publicUrl = $pathOrUrl;
+                        
+                        // Se já for uma URL completa, usa como está
+                        if (!preg_match('#^https?://#i', $pathOrUrl)) {
+                            // Tenta gerar URL temporária do S3
+                            $candidates = array_values(array_filter([$disk, 's3', 'public']));
+                            
+                            foreach ($candidates as $d) {
+                                try {
+                                    $storage = \Illuminate\Support\Facades\Storage::disk($d);
+                                    
+                                    if (method_exists($storage, 'temporaryUrl')) {
+                                        $publicUrl = $storage->temporaryUrl($pathOrUrl, now()->addHours(24));
+                                        Log::info('Chat Simulator: URL temporária gerada', [
+                                            'disk' => $d,
+                                            'url_preview' => substr($publicUrl, 0, 100),
+                                        ]);
+                                        break;
+                                    } elseif (method_exists($storage, 'url')) {
+                                        $publicUrl = $storage->url($pathOrUrl);
+                                        Log::info('Chat Simulator: URL pública gerada', [
+                                            'disk' => $d,
+                                            'url_preview' => substr($publicUrl, 0, 100),
+                                        ]);
+                                        break;
+                                    }
+                                } catch (\Exception $e) {
+                                    Log::warning('Chat Simulator: Erro ao gerar URL do disco ' . $d, [
+                                        'error' => $e->getMessage(),
+                                    ]);
+                                    continue;
+                                }
+                            }
+                        }
+                        
+                        // Captura a mensagem com o link do arquivo
+                        $message = "📄 *{$caption}*\n\n";
+                        $message .= "🔗 Link para download:\n{$publicUrl}";
+                        
+                        Log::info('Chat Simulator: Capturando mensagem do PDF', [
+                            'message_preview' => substr($message, 0, 150),
+                        ]);
+                        
+                        $this->simulator->captureResponse($message);
+                        
+                        return [
+                            'ok' => true,
+                            'simulated' => true,
+                            'url' => $publicUrl,
+                            'via' => 'simulator',
+                        ];
+                    } catch (\Exception $e) {
+                        Log::error('Chat Simulator: Erro ao processar sendMediaSmart', [
+                            'error' => $e->getMessage(),
+                            'trace' => $e->getTraceAsString(),
+                        ]);
+                        
+                        $message = "📄 *{$caption}*\n\n";
+                        $message .= "⚠️ Erro ao gerar link do arquivo. O arquivo foi gerado mas não foi possível obter o link.";
+                        
+                        $this->simulator->captureResponse($message);
+                        
+                        return [
+                            'ok' => false,
+                            'error' => $e->getMessage(),
+                            'simulated' => true,
+                        ];
+                    }
+                }
             };
             Log::info('Chat Simulator: WppController simulado instanciado com sucesso');
         } catch (\Exception $e) {
@@ -344,13 +433,41 @@ class ChatSimulatorController extends Controller
             ]);
         }
         
+        // ===== TRATAR RESPOSTA AO MENU (1-8) =====
+        // IMPORTANTE: Se o menu foi mostrado mas a mensagem NÃO é um número 1-8 (qualquer pergunta/texto),
+        // limpa a flag automaticamente e marca para ignorar comandos especiais, permitindo que a IA processe a mensagem normalmente.
+        $ctx = $thread->context ?? [];
+        $menuWasShown = !empty(data_get($ctx, 'shortcut_menu.shown_at'));
+        if ($menuWasShown && !preg_match('/^\s*[1-9]\s*$/', $norm)) {
+            // Limpa a flag do menu e marca que devemos ignorar comandos especiais nesta mensagem
+            // para que seja processada pela IA normalmente
+            $ctx = $thread->context ?? [];
+            unset($ctx['shortcut_menu']);
+            // Marca flag temporária para ignorar comandos especiais nesta mensagem
+            $ctx['ignore_special_commands'] = true;
+            $thread->context = $ctx;
+            $thread->save();
+            Log::info('Chat Simulator: Limpou flag do menu, mensagem não é opção 1-8 - processando normalmente pela IA', [
+                'phone' => $phone, 
+                'norm' => substr($norm, 0, 50)
+            ]);
+            // Recarrega o contexto atualizado
+            $ctx = $thread->context ?? [];
+        }
+        
         // ===== RESUMO (sempre disponível) - ANTES DE QUALQUER PROCESSAMENTO =====
+        // Ignora comando "resumo" se acabamos de limpar a flag do menu (mensagem deve ser processada pela IA)
+        // Garante que $ctx está definido
+        if (!isset($ctx)) {
+            $ctx = $thread->context ?? [];
+        }
+        $shouldIgnoreSpecialCommands = !empty(data_get($ctx, 'ignore_special_commands'));
         try {
             $isResumoMethod = $reflection->getMethod('isResumoCommand');
             $isResumoMethod->setAccessible(true);
             $isResumo = $isResumoMethod->invoke($wppController, $norm);
             
-            if ($isResumo) {
+            if (!$shouldIgnoreSpecialCommands && $isResumo) {
                 Log::info('Chat Simulator: É comando resumo');
                 $buildResumoMethod = $reflection->getMethod('buildResumoText');
                 $buildResumoMethod->setAccessible(true);
@@ -366,12 +483,13 @@ class ChatSimulatorController extends Controller
         }
         
         // ===== MENU DE ATALHOS (só com empreendimento selecionado) - ANTES DE QUALQUER PROCESSAMENTO =====
+        // Ignora comando "menu" se acabamos de limpar a flag do menu (mensagem deve ser processada pela IA)
         try {
             $isMenuMethod = $reflection->getMethod('isShortcutMenuCommand');
             $isMenuMethod->setAccessible(true);
             $isMenu = $isMenuMethod->invoke($wppController, $norm);
             
-            if ($isMenu) {
+            if (!$shouldIgnoreSpecialCommands && $isMenu) {
                 Log::info('Chat Simulator: É comando menu');
                 
                 // Menu só funciona se tiver empreendimento selecionado
@@ -624,14 +742,41 @@ class ChatSimulatorController extends Controller
         }
         // ================== FIM SUPER HARD-GATE ARQUIVOS ==================
         
+        // Remove flag temporária de ignorar comandos especiais antes de processar pela IA
+        // (se foi definida ao limpar a flag do menu)
+        // Garante que $ctx está definido
+        if (!isset($ctx)) {
+            $ctx = $thread->context ?? [];
+        }
+        if (!empty(data_get($ctx, 'ignore_special_commands'))) {
+            $ctx = $thread->context ?? [];
+            unset($ctx['ignore_special_commands']);
+            $thread->context = $ctx;
+            $thread->save();
+            Log::info('Chat Simulator: Removeu flag ignore_special_commands antes de processar pela IA', ['phone' => $phone]);
+            $ctx = $thread->context ?? [];
+        }
+        
         // Processa perguntas normais usando handleNormalAIFlow (só se não for arquivo)
         try {
+            Log::info('Chat Simulator: Chamando handleNormalAIFlow', [
+                'phone' => $phone,
+                'text_preview' => substr($text, 0, 50),
+                'selected_emp' => $thread->selected_empreendimento_id,
+            ]);
+            
             $handleAIMethod = $reflection->getMethod('handleNormalAIFlow');
             $handleAIMethod->setAccessible(true);
-            $handleAIMethod->invoke($wppController, $thread, $text);
-        } catch (\Exception $e) {
+            $result = $handleAIMethod->invoke($wppController, $thread, $text);
+            
+            Log::info('Chat Simulator: handleNormalAIFlow concluído', [
+                'result' => $result !== null ? 'retornou valor' : 'null',
+            ]);
+        } catch (\Throwable $e) {
             Log::error('Chat Simulator: Erro ao processar pergunta IA', [
                 'error' => $e->getMessage(),
+                'file' => $e->getFile(),
+                'line' => $e->getLine(),
                 'trace' => $e->getTraceAsString(),
             ]);
             // Em caso de erro, envia mensagem genérica
@@ -640,7 +785,10 @@ class ChatSimulatorController extends Controller
                 $sendTextMethod->setAccessible(true);
                 $sendTextMethod->invoke($wppController, $phone, "Desculpe, ocorreu um erro ao processar sua pergunta. Por favor, tente novamente.");
             } catch (\Exception $e2) {
-                Log::error('Chat Simulator: Erro ao enviar mensagem de erro', ['error' => $e2->getMessage()]);
+                Log::error('Chat Simulator: Erro ao enviar mensagem de erro', [
+                    'error' => $e2->getMessage(),
+                    'trace' => $e2->getTraceAsString(),
+                ]);
             }
         }
         

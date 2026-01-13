@@ -342,13 +342,29 @@ if ($hasMedia) {
         return response()->json(['ok' => true, 'handled' => 'media_sem_emp']);
     }
 
-    // 4) Descobrir o corretor (user) vinculado ao thread
+    // 3.5) Descobrir o corretor (user) vinculado ao thread primeiro
     $corretorId = $thread->user_id ?? $thread->corretor_id;
     if (!$corretorId) {
         // tenta vincular na marra
         $this->attachCorretorToThread($thread, $phone);
         $corretorId = $thread->user_id ?? $thread->corretor_id;
     }
+    
+    // 3.6) Verifica se o empreendimento é de revenda do próprio usuário
+    $emp = Empreendimento::find($empreendimentoId);
+    
+    if (!$emp || $emp->is_revenda != 1 || $emp->dono_corretor_id != $corretorId) {
+        // Não é empreendimento de revenda do usuário
+        $this->sendText(
+            $phone,
+            "⚠️ Você só pode adicionar fotos/vídeos na galeria de empreendimentos de revenda que você criou.\n\n" .
+            "Para criar seu próprio empreendimento, digite *criar empreendimento*." .
+            $this->footerControls()
+        );
+        return response()->json(['ok' => true, 'handled' => 'media_nao_revenda']);
+    }
+
+    // 4) Verificar se o corretor foi encontrado
 
     if (!$corretorId) {
         $this->sendText(
@@ -582,8 +598,30 @@ if (!empty($text) && isset($ctx['gallery_ask_emp'])) {
 
 
 
-// ===== TRATAR RESPOSTA AO MENU (1-8) =====
-if (!empty(data_get($ctx, 'shortcut_menu.shown_at')) && preg_match('/^\s*[1-8]\s*$/', $norm)) {
+// ===== TRATAR RESPOSTA AO MENU (1-9) =====
+// IMPORTANTE: Se o menu foi mostrado mas a mensagem NÃO é um número 1-9 (qualquer pergunta/texto),
+// limpa a flag automaticamente e marca para ignorar comandos especiais, permitindo que a IA processe a mensagem normalmente.
+// Isso garante que o usuário pode fazer qualquer pergunta após ver o menu, sem ser obrigado a escolher uma opção.
+$menuWasShown = !empty(data_get($ctx, 'shortcut_menu.shown_at'));
+if ($menuWasShown && !preg_match('/^\s*[1-9]\s*$/', $norm)) {
+    // Limpa a flag do menu e marca que devemos ignorar comandos especiais nesta mensagem
+    // para que seja processada pela IA normalmente
+    $ctx = $thread->context ?? [];
+    unset($ctx['shortcut_menu']);
+    // Marca flag temporária para ignorar comandos especiais nesta mensagem
+    $ctx['ignore_special_commands'] = true;
+    $thread->context = $ctx;
+    $thread->save();
+    Log::info('WPP: Limpou flag do menu, mensagem não é opção 1-8 - processando normalmente pela IA', [
+        'phone' => $phone, 
+        'norm' => substr($norm, 0, 50)
+    ]);
+    // Recarrega o contexto atualizado
+    $ctx = $thread->context ?? [];
+}
+
+// Se é uma opção válida do menu (1-8), processa
+if (!empty(data_get($ctx, 'shortcut_menu.shown_at')) && preg_match('/^\s*[1-9]\s*$/', $norm)) {
     $option = trim($norm);
 
     // se ainda não escolheu empreendimento, não adianta (exceto opções que não precisam)
@@ -627,6 +665,9 @@ if (!empty(data_get($ctx, 'shortcut_menu.shown_at')) && preg_match('/^\s*[1-8]\s
     elseif ($option === '3') {
         $answer = $this->handleUnidadesPergunta($empId, $this->normalizeText('quais unidades livres'));
         if ($answer !== null) {
+            // Adiciona link do Google Maps se houver endereço na resposta
+            $answer = $this->addGoogleMapsLinkIfAddress($answer, $thread);
+            
             return $this->sendText($phone, $answer . $this->footerControls());
         }
     }
@@ -663,8 +704,21 @@ if (!empty(data_get($ctx, 'shortcut_menu.shown_at')) && preg_match('/^\s*[1-8]\s
             $this->footerControls()
         );
     }
-    // 7 → instrução para galeria
+    // 7 → instrução para galeria (só se for empreendimento de revenda do usuário)
     elseif ($option === '7') {
+        // Verifica se é empreendimento de revenda do próprio usuário
+        $emp = Empreendimento::find($empId);
+        $isRevendaDoUsuario = $emp && $emp->is_revenda == 1 && $emp->dono_corretor_id == $thread->corretor_id;
+        
+        if (!$isRevendaDoUsuario) {
+            return $this->sendText(
+                $phone,
+                "⚠️ Esta opção está disponível apenas para empreendimentos de revenda que você criou.\n\n" .
+                "Para criar seu próprio empreendimento, digite *criar empreendimento*." .
+                $this->footerControls()
+            );
+        }
+        
         return $this->sendText(
             $phone,
             "Para adicionar fotos/vídeos na galeria:\n" .
@@ -689,6 +743,11 @@ if (!empty(data_get($ctx, 'shortcut_menu.shown_at')) && preg_match('/^\s*[1-8]\s
             "A IA vai consultar os documentos e informações do empreendimento para responder." .
             $this->footerControls()
         );
+    }
+    // 9 → resumo do empreendimento
+    elseif ($option === '9') {
+        $resumoText = $this->buildResumoText($thread);
+        return $this->sendText($phone, $resumoText);
     }
 }
 // ===== FIM RESPOSTA AO MENU =====
@@ -1045,13 +1104,16 @@ if (!empty($thread->selected_empreendimento_id) && $this->isMultiIndexList($text
 }
 
         // ===== RESUMO (sempre disponível) - ANTES DE QUALQUER PROCESSAMENTO DE IA =====
-if ($this->isResumoCommand($norm)) {
+// Ignora comando "resumo" se acabamos de limpar a flag do menu (mensagem deve ser processada pela IA)
+$shouldIgnoreSpecialCommands = !empty(data_get($ctx, 'ignore_special_commands'));
+if (!$shouldIgnoreSpecialCommands && $this->isResumoCommand($norm)) {
     $resumoText = $this->buildResumoText($thread);
     return $this->sendText($phone, $resumoText);
 }
 
         // ===== MENU DE ATALHOS (só com empreendimento selecionado) - ANTES DE QUALQUER PROCESSAMENTO DE IA =====
-if ($this->isShortcutMenuCommand($norm)) {
+// Ignora comando "menu" se acabamos de limpar a flag do menu (mensagem deve ser processada pela IA)
+if (!$shouldIgnoreSpecialCommands && $this->isShortcutMenuCommand($norm)) {
     // Menu só funciona se tiver empreendimento selecionado
     if (empty($thread->selected_empreendimento_id)) {
         return $this->sendText(
@@ -1184,60 +1246,59 @@ if ($thread->state === 'creating_revenda_nome') {
     );
 
     return response()->json(['ok' => true, 'handled' => 'criar_empreendimento_nome_ok']);
-}
+    }
 
-        // Estado: aguardando escolha → tentar capturar índice
-        if ($thread->state === 'awaiting_emp_choice') {
-            if ($idx = $this->extractIndexNumber($norm)) {
-                $map = data_get($ctx, 'emp_map', []);
-                if (isset($map[$idx])) {
-                    $empreendimentoId = (int) $map[$idx];
-                    return $this->finalizeSelection($thread, $empreendimentoId);
-                }
-                // Índice inválido → relista
-                return $this->sendEmpreendimentosList($thread);
+    // Estado: aguardando escolha → tentar capturar índice
+    if ($thread->state === 'awaiting_emp_choice') {
+        if ($idx = $this->extractIndexNumber($norm)) {
+            $map = data_get($ctx, 'emp_map', []);
+            if (isset($map[$idx])) {
+                $empreendimentoId = (int) $map[$idx];
+                return $this->finalizeSelection($thread, $empreendimentoId);
             }
-
-            // Se não mandou número, garantir que existe mapa válido; senão relista
-            $mapAtual = data_get($ctx, 'emp_map');
-            $expired  = $this->isEmpMapExpired($ctx);
-            $mapOk    = is_array($mapAtual) && count($mapAtual) > 0;
-
-            if (!$mapOk || $expired) {
-                \Log::info('WPP: mapa inexistente/expirado → relistar', [
-                    'phone' => $phone, 'mapOk' => $mapOk, 'expired' => $expired
-                ]);
-                return $this->sendEmpreendimentosList($thread);
-            }
-
-            // Reforço de instrução
-            return $this->sendText(
-                $phone,
-                "Envie apenas o *número* do empreendimento (ex.: 1)." . $this->footerControls()
-            );
-        }
-
-        // Se ainda não há empreendimento escolhido → listar
-        if (empty($thread->selected_empreendimento_id)) {
-            Log::info('WPP: sem empreendimento selecionado → listar', ['phone' => $phone]);
+            // Índice inválido → relista
             return $this->sendEmpreendimentosList($thread);
         }
 
-        // ✅ JÁ HÁ EMPREENDIMENTO SELECIONADO:
-        // Primeiro tenta responder sobre UNIDADES (tabela empreendimento_unidades)
-        $respUnidades = $this->handleUnidadesPergunta(
-            (int) $thread->selected_empreendimento_id,
-            $text
-        );
+        // Se não mandou número, garantir que existe mapa válido; senão relista
+        $mapAtual = data_get($ctx, 'emp_map');
+        $expired  = $this->isEmpMapExpired($ctx);
+        $mapOk    = is_array($mapAtual) && count($mapAtual) > 0;
 
-        if ($respUnidades !== null) {
-            return $this->sendText($phone, $respUnidades . $this->footerControls());
+        if (!$mapOk || $expired) {
+            \Log::info('WPP: mapa inexistente/expirado → relistar', [
+                'phone' => $phone, 'mapOk' => $mapOk, 'expired' => $expired
+            ]);
+            return $this->sendEmpreendimentosList($thread);
         }
 
-        // Se não for pergunta de unidade, cai no fluxo normal da IA
-        return $this->handleNormalAIFlow($thread, $text);
+        // Reforço de instrução
+        return $this->sendText(
+            $phone,
+            "Envie apenas o *número* do empreendimento (ex.: 1)." . $this->footerControls()
+        );
     }
 
+    // Se ainda não há empreendimento escolhido → listar
+    if (empty($thread->selected_empreendimento_id)) {
+        Log::info('WPP: sem empreendimento selecionado → listar', ['phone' => $phone]);
+        return $this->sendEmpreendimentosList($thread);
+    }
+
+    // ✅ JÁ HÁ EMPREENDIMENTO SELECIONADO:
+    // Primeiro tenta responder sobre UNIDADES (tabela empreendimento_unidades)
+    $respUnidades = $this->handleUnidadesPergunta(
+        (int) $thread->selected_empreendimento_id,
+        $text
+    );
+
+    if ($respUnidades !== null) {
+        return $this->sendText($phone, $respUnidades . $this->footerControls());
+    }
+
+    // Se não for pergunta de unidade, cai no fluxo normal da IA
+    return $this->handleNormalAIFlow($thread, $text);
+}
 
     /**
  * Só pode alterar status de unidade quem tiver role = DIRETOR.
@@ -1658,9 +1719,24 @@ protected function sendText(string $phone, string $text): array
             "Pode me dizer sua dúvida sobre o empreendimento?" . $this->footerControls()
         );
     }
+    
+    // Remove flag temporária de ignorar comandos especiais antes de processar pela IA
+    // (se foi definida ao limpar a flag do menu)
+    $ctx = $thread->context ?? [];
+    if (!empty(data_get($ctx, 'ignore_special_commands'))) {
+        unset($ctx['ignore_special_commands']);
+        $thread->context = $ctx;
+        $thread->save();
+        Log::info('WPP: Removeu flag ignore_special_commands antes de processar pela IA', ['phone' => $phone]);
+    }
 
     // 🔍 IA-LOCAL: tenta reaproveitar resposta do cache (exato + similaridade)
 if ($localAnswer = $this->findAnswerInLocalCacheWithSimilarity($empId, $question)) {
+    // Adiciona link do Google Maps se for pergunta sobre endereço
+    $isEnderecoQuestion = preg_match('/\b(endere[çc]o|localiza[çc][ãa]o|onde\s+fica|onde\s+est[áa]|local\s+do|local\s+de|local|endere[çc]o\s+do|endere[çc]o\s+de|endere[çc]o\s+completo|endere[çc]o\s+dele|endere[çc]o\s+dela)\b/iu', $question);
+    if ($isEnderecoQuestion) {
+        $localAnswer = $this->addGoogleMapsLinkIfAddress($localAnswer, $thread, true);
+    }
     return $this->sendText($phone, $localAnswer . $this->footerControls());
 }
 
@@ -1789,99 +1865,6 @@ $pdfPath = $this->buildAndStoreProposalPdf(
         }
     }
 
-    // --------------------------------------------------------------------
-// Estado: aguardando nome da revenda
-// --------------------------------------------------------------------
-if ($thread->state === 'creating_revenda_nome') {
-
-    // se não mandou texto, pede de novo
-    if (trim($text) === '') {
-        $this->sendText($phone, "Por favor, me envie o *nome* do novo empreendimento que você quer criar.");
-        return response()->json(['ok' => true, 'handled' => 'criar_empreendimento_nome_vazio']);
-    }
-
-    $nome = trim($text);
-    $corretorId = (int) $thread->corretor_id;
-    $companyId  = $thread->company_id ?? null; // se você tiver esse campo no thread
-
-    // cria o empreendimento de revenda
-    $emp = new Empreendimento();
-    $emp->nome             = $nome;
-    $emp->is_revenda       = 1;
-    $emp->dono_corretor_id = $corretorId;
-
-    // campos opcionais, se existirem na sua tabela:
-    if (property_exists($emp, 'company_id') || \Schema::hasColumn($emp->getTable(), 'company_id')) {
-        $emp->company_id = $companyId;
-    }
-    if (\Schema::hasColumn($emp->getTable(), 'status')) {
-        $emp->status = 'rascunho';
-    }
-
-    $emp->save();
-
-    // vincula esse empreendimento ao thread
-    $thread->selected_empreendimento_id = $emp->id;
-    $thread->state = 'idle'; // volta pro fluxo normal
-    $thread->save();
-
-    $this->sendText(
-        $phone,
-        "✅ Empreendimento de revenda criado com sucesso!\n\n" .
-        "🏢 *{$emp->nome}*\n" .
-        "ID interno: {$emp->id}\n\n" .
-        "Agora você pode enviar *fotos e vídeos* desse empreendimento aqui mesmo, " .
-        "que eu vou salvar tudo na sua galeria exclusiva dele. 😉"
-    );
-
-    return response()->json(['ok' => true, 'handled' => 'criar_empreendimento_nome_ok']);
-}
-
-
-    /**
-     * 🧮 SUPER-GATE: perguntas de pagamento / tabela (Excel)
-     * Se a pergunta for algo como:
-     * "quais as informações de pagamento da unidade 301, torre 5?"
-     * tentamos responder APENAS pela planilha Excel do empreendimento.
-     */
-    if ($this->looksLikePaymentQuestion($question)) {
-        try {
-            $answerFromExcel = $this->answerFromExcelPayment($thread, $question);
-
-            if ($answerFromExcel !== null) {
-                // registra no histórico
-                $latencyMs  = 0;
-                $latencySec = 0;
-
-                $this->storeMessage($thread, [
-                    'sender'          => 'ia',
-                    'type'            => 'text',
-                    'body'            => $answerFromExcel,
-                    'latency_ms'      => $latencyMs,
-                    'latency_seconds' => $latencySec,
-                    'meta'            => [
-                        'emp_id' => $empId,
-                        'source' => 'excel_pagamento',
-                    ],
-                ]);
-
-                // opcional: salvar na “memória local” também
-                if ($empId > 0) {
-                    $this->storeLocalAnswer($empId, $question, $answerFromExcel, 'excel_pagamento');
-                }
-
-                return $this->sendText($phone, $answerFromExcel . $this->footerControls());
-            }
-
-        } catch (\Throwable $ex) {
-            \Log::warning('Pagamento Excel: falha ao responder por planilha', [
-                'empId' => $empId,
-                'err'   => $ex->getMessage(),
-            ]);
-            // se der erro, fluxo continua normalmente na IA
-        }
-    }
-
     // 🧠 NOVO: tentar responder pela MEMÓRIA LOCAL (FAQ por empreendimento) antes de ir pra IA
     if ($empId > 0) {
         if ($localAnswer = $this->lookupLocalAnswer($empId, $question)) {
@@ -1889,6 +1872,12 @@ if ($thread->state === 'creating_revenda_nome') {
                 'phone' => $phone,
                 'empId' => $empId,
             ]);
+
+            // Adiciona link do Google Maps se for pergunta sobre endereço
+            $isEnderecoQuestion = preg_match('/\b(endere[çc]o|localiza[çc][ãa]o|onde\s+fica|onde\s+est[áa]|local\s+do|local\s+de|local|endere[çc]o\s+do|endere[çc]o\s+de|endere[çc]o\s+completo|endere[çc]o\s+dele|endere[çc]o\s+dela)\b/iu', $question);
+            if ($isEnderecoQuestion) {
+                $localAnswer = $this->addGoogleMapsLinkIfAddress($localAnswer, $thread, true);
+            }
 
             return $this->sendText($phone, $localAnswer . $this->footerControls());
         }
@@ -1900,6 +1889,15 @@ if ($thread->state === 'creating_revenda_nome') {
 
     if (Cache::has($answerCacheKey)) {
         $cachedAnswer = Cache::get($answerCacheKey);
+        // Limpa a resposta do cache também (caso tenha sido salva antes da limpeza)
+        $cachedAnswer = $this->cleanAIResponse($cachedAnswer);
+        
+        // Adiciona link do Google Maps se for pergunta sobre endereço
+        $isEnderecoQuestion = preg_match('/\b(endere[çc]o|localiza[çc][ãa]o|onde\s+fica|onde\s+est[áa]|local\s+do|local\s+de|local|endere[çc]o\s+do|endere[çc]o\s+de|endere[çc]o\s+completo|endere[çc]o\s+dele|endere[çc]o\s+dela)\b/iu', $question);
+        if ($isEnderecoQuestion) {
+            $cachedAnswer = $this->addGoogleMapsLinkIfAddress($cachedAnswer, $thread, true);
+        }
+        
         return $this->sendText($phone, $cachedAnswer . $this->footerControls());
     }
 
@@ -1936,6 +1934,9 @@ if ($thread->state === 'creating_revenda_nome') {
                     $this->storeLocalAnswer($empId, $question, $answerFromTexto, 'texto_ia');
                 }
 
+                // Adiciona link do Google Maps se houver endereço na resposta
+                $answerFromTexto = $this->addGoogleMapsLinkIfAddress($answerFromTexto, $thread);
+                
                 return $this->sendText($phone, $answerFromTexto . $this->footerControls());
             }
         }
@@ -1979,11 +1980,11 @@ if ($thread->state === 'creating_revenda_nome') {
             $tries++;
 
             // 🔧 aumenta o tempo máximo de espera da IA (ex: 60s)
-$maxWaitSeconds = 60;
+            $maxWaitSeconds = 60;
 
-if ((microtime(true) - $startWait) > $maxWaitSeconds) {
-    break;
-}
+            if ((microtime(true) - $startWait) > $maxWaitSeconds) {
+                break;
+            }
 
         } while (in_array($run->status, ['queued','in_progress','cancelling']) && $tries < $maxTries);
 
@@ -2020,11 +2021,8 @@ if ((microtime(true) - $startWait) > $maxWaitSeconds) {
         }
 
         // LIMPEZA DE CITAÇÕES E AJUSTE DE PONTUAÇÃO
-        $answerText = preg_replace('/【\d+:\d+†source】/u', '', $answerText);
-        $answerText = preg_replace('/\s+([.,;:!?])/u', '$1', $answerText);
-        $answerText = preg_replace("/[ \t]+/u", ' ', $answerText);
-        $answerText = preg_replace("/\n{3,}/u", "\n\n", $answerText);
-        $answerText = trim($answerText);
+        // IMPORTANTE: Limpa ANTES de adicionar o link do Google Maps
+        $answerText = $this->cleanAIResponse($answerText);
 
         // 💾 Salva no cache volátil para perguntas repetidas
         Cache::put($answerCacheKey, $answerText, now()->addMinutes(30));
@@ -2052,6 +2050,15 @@ if ((microtime(true) - $startWait) > $maxWaitSeconds) {
             $this->storeLocalAnswer($empId, $question, $answerText, 'vector_store');
         }
 
+        // Adiciona link do Google Maps APENAS se a pergunta for explicitamente sobre endereço/localização
+        // NÃO adiciona em outras perguntas (ex: data de lançamento, preço, etc.)
+        $isEnderecoQuestion = preg_match('/\b(endere[çc]o|localiza[çc][ãa]o|onde\s+fica|onde\s+est[áa]|local\s+do|local\s+de|local|endere[çc]o\s+do|endere[çc]o\s+de|endere[çc]o\s+completo|endere[çc]o\s+dele|endere[çc]o\s+dela)\b/iu', $question);
+        
+        // Só adiciona se for pergunta sobre endereço
+        if ($isEnderecoQuestion) {
+            $answerText = $this->addGoogleMapsLinkIfAddress($answerText, $thread, true);
+        }
+        
         return $this->sendText($phone, $answerText . $this->footerControls());
 
     } catch (\Throwable $e) {
@@ -2069,44 +2076,44 @@ if ((microtime(true) - $startWait) > $maxWaitSeconds) {
     }
 }
 
-/**
- * Tenta extrair o "grupo genérico" (torre/bloco/quadra/etc.) do texto.
- *
- * Exemplos:
- *  - "unidade 102 torre 5"    → "Torre 5"
- *  - "casa 10 quadra b"       → "Quadra B"
- *  - "lote 12 quadra 3"       → "Quadra 3"
- */
-protected function parseGenericGroup(string $msgNorm): ?string
-{
-    $msgNorm = mb_strtolower(trim($msgNorm));
+    /**
+     * Tenta extrair o "grupo genérico" (torre/bloco/quadra/etc.) do texto.
+     *
+     * Exemplos:
+     *  - "unidade 102 torre 5"    → "Torre 5"
+     *  - "casa 10 quadra b"       → "Quadra B"
+     *  - "lote 12 quadra 3"       → "Quadra 3"
+     */
+    protected function parseGenericGroup(string $msgNorm): ?string
+    {
+        $msgNorm = mb_strtolower(trim($msgNorm));
 
-    // procura por termos de grupo + valor
-    if (preg_match(
-        '/\b(torre|bloco|quadra|ala|alameda|casa|predio|prédio|condominio|condomínio|edificio|edifício)\s+([0-9a-z\.]+)/u',
-        $msgNorm,
-        $m
-    )) {
-        $label = $m[1];          // torre / bloco / quadra...
-        $valor = strtoupper($m[2]); // 5, b, 3...
+        // procura por termos de grupo + valor
+        if (preg_match(
+            '/\b(torre|bloco|quadra|ala|alameda|casa|predio|prédio|condominio|condomínio|edificio|edifício)\s+([0-9a-z\.]+)/u',
+            $msgNorm,
+            $m
+        )) {
+            $label = $m[1];          // torre / bloco / quadra...
+            $valor = strtoupper($m[2]); // 5, b, 3...
 
-        // normalização bonitinha de alguns termos
-        $map = [
-            'predio'      => 'Prédio',
-            'prédio'      => 'Prédio',
-            'condominio'  => 'Condomínio',
-            'condomínio'  => 'Condomínio',
-            'edificio'    => 'Edifício',
-            'edifício'    => 'Edifício',
-        ];
+            // normalização bonitinha de alguns termos
+            $map = [
+                'predio'      => 'Prédio',
+                'prédio'      => 'Prédio',
+                'condominio'  => 'Condomínio',
+                'condomínio'  => 'Condomínio',
+                'edificio'    => 'Edifício',
+                'edifício'    => 'Edifício',
+            ];
 
-        $labelFormatado = $map[$label] ?? ucfirst($label);
+            $labelFormatado = $map[$label] ?? ucfirst($label);
 
-        return $labelFormatado . ' ' . $valor;
+            return $labelFormatado . ' ' . $valor;
+        }
+
+        return null;
     }
-
-    return null;
-}
 
 
 
@@ -2235,9 +2242,8 @@ PROMPT;
                 return null; // sinal pra cair no Vector Store
             }
 
-            // pequena limpeza opcional
-            $answer = preg_replace("/\n{3,}/u", "\n\n", $answer);
-            $answer = trim($answer);
+            // Limpa referências de fonte do OpenAI
+            $answer = $this->cleanAIResponse($answer);
 
             return $answer;
 
@@ -3736,6 +3742,134 @@ protected function buildAndStoreProposalPdf(
        // limpa texto para PDF (remove emojis e lixo de charset)
 $textoPagamentoPdf = $this->sanitizePaymentTextForPdf($textoPagamento);
 
+// === Imagem do empreendimento para banner ===
+// Usa a mesma lógica da lista de empreendimentos: prioriza banner_thumb
+$empreendimentoBanner = null;
+
+// 1) PRIMEIRO: Usa banner_thumb (mesma imagem do card da lista)
+if ($emp->banner_thumb) {
+    $empreendimentoBanner = $emp->banner_thumb;
+}
+
+// 2) Se não encontrou banner_thumb, busca fotos da tabela empreendimento_midias
+if (!$empreendimentoBanner) {
+    $midia = \App\Models\EmpreendimentoMidia::where('empreendimento_id', $empId)
+        ->where('arquivo_tipo', 'foto')
+        ->orderBy('id', 'asc')
+        ->first();
+
+    if ($midia && $midia->arquivo_path) {
+        $empreendimentoBanner = $midia->arquivo_path;
+    }
+}
+
+// 3) Se ainda não encontrou, busca fotos na pasta do S3
+if (!$empreendimentoBanner) {
+    $companyId = $thread->tenant_id ?? 1;
+    $prefix = "documentos/tenants/{$companyId}/empreendimentos/{$empId}/";
+    $disk = Storage::disk('s3');
+    
+    if ($disk->exists($prefix)) {
+        $files = $disk->files($prefix);
+        $allowedImages = ['jpg', 'jpeg', 'png', 'gif', 'webp'];
+        
+        $photos = array_values(array_filter(
+            $files,
+            function ($p) use ($allowedImages) {
+                $ext = strtolower(pathinfo($p, PATHINFO_EXTENSION));
+                return in_array($ext, $allowedImages, true);
+            }
+        ));
+        
+        if (!empty($photos)) {
+            $empreendimentoBanner = $photos[0]; // Pega a primeira foto
+        }
+    }
+}
+
+// 4) Último recurso: outros campos do modelo
+if (!$empreendimentoBanner) {
+    $empreendimentoBanner = $emp->banner_path ?? $emp->imagem_principal ?? null;
+}
+
+// Gera URL temporária se for caminho relativo (mesma lógica da lista)
+if ($empreendimentoBanner && !preg_match('#^https?://#i', $empreendimentoBanner)) {
+    try {
+        // Usa temporaryUrl para garantir acesso no PDF (válido por 24h)
+        $empreendimentoBanner = Storage::disk('s3')->temporaryUrl($empreendimentoBanner, now()->addHours(24));
+    } catch (\Exception $e) {
+        Log::warning('buildAndStoreProposalPdf: erro ao gerar URL do banner', ['error' => $e->getMessage()]);
+        $empreendimentoBanner = null;
+    }
+}
+
+// === Logo da imobiliária ===
+$imobiliariaLogoUrl = $emp->imobiliaria_logo_url ?? $emp->imobiliaria_logo ?? null;
+if ($imobiliariaLogoUrl && !preg_match('#^https?://#i', $imobiliariaLogoUrl)) {
+    // Se for caminho relativo, tenta gerar URL
+    try {
+        $imobiliariaLogoUrl = Storage::disk('s3')->temporaryUrl($imobiliariaLogoUrl, now()->addHours(24));
+    } catch (\Exception $e) {
+        Log::warning('buildAndStoreProposalPdf: erro ao gerar URL do logo', ['error' => $e->getMessage()]);
+        $imobiliariaLogoUrl = null;
+    }
+}
+
+// === Busca diferenciais/amenidades ===
+$diferenciais = [];
+
+// 1) Busca do campo amenidades no banco de dados
+if ($emp->amenidades && is_array($emp->amenidades) && !empty($emp->amenidades)) {
+    $diferenciais = $emp->amenidades;
+} elseif ($emp->amenidades && is_string($emp->amenidades)) {
+    // Se for string JSON, tenta decodificar
+    $decoded = json_decode($emp->amenidades, true);
+    if (is_array($decoded)) {
+        $diferenciais = $decoded;
+    } else {
+        // Se for string simples, divide por vírgula ou quebra de linha
+        $diferenciais = array_filter(array_map('trim', preg_split('/[,\n]/', $emp->amenidades)));
+    }
+}
+
+// 2) Se não encontrou no banco, busca informações de PDFs na AWS
+if (empty($diferenciais)) {
+    $companyId = $thread->tenant_id ?? 1;
+    $prefix = "documentos/tenants/{$companyId}/empreendimentos/{$empId}/";
+    $disk = Storage::disk('s3');
+    
+    if ($disk->exists($prefix)) {
+        $files = $disk->files($prefix);
+        $pdfFiles = array_values(array_filter(
+            $files,
+            function ($p) {
+                return strtolower(pathinfo($p, PATHINFO_EXTENSION)) === 'pdf';
+            }
+        ));
+        
+        // Se encontrar PDFs, pode extrair informações deles (opcional)
+        // Por enquanto, vamos usar valores padrão se não houver amenidades
+        if (empty($diferenciais) && !empty($pdfFiles)) {
+            // Se houver PDFs mas não amenidades, pode adicionar uma nota
+            // Por enquanto, deixamos vazio para usar valores padrão
+        }
+    }
+}
+
+// 3) Se ainda não encontrou, usa valores padrão
+if (empty($diferenciais)) {
+    $diferenciais = [
+        'Área de lazer completa',
+        'Piscina adulto e infantil',
+        'Academia equipada',
+        'Salão de festas',
+        'Playground',
+        'Quadra poliesportiva',
+        'Espaço gourmet',
+        'Pet place'
+    ];
+}
+
 // 1) Monta o HTML do PDF
 $html = view('pdf.proposta_unidade', [
     'empreendimentoNome' => $emp->nome ?? 'Empreendimento',
@@ -3746,19 +3880,29 @@ $html = view('pdf.proposta_unidade', [
     'hoje'               => now()->format('d/m/Y'),
     'imobiliariaNome'    => $emp->imobiliaria_nome ?? 'Imobiliária',
     'imobiliariaSite'    => $emp->imobiliaria_site ?? null,
-    'imobiliariaLogo'    => $emp->imobiliaria_logo_url ?? null,
+    'imobiliariaLogo'    => $imobiliariaLogoUrl,
+    'empreendimentoBanner' => $empreendimentoBanner,
     'corretorNome'       => optional($thread->user)->name ?? null,
     'corretorTelefone'   => optional($thread->user)->phone ?? null,
+    'diferenciais'       => $diferenciais,
 ])->render();
 
 
         // === Gera o PDF ===
+        // Usa um tamanho customizado: largura A4 landscape (842pt) x altura menor para evitar espaço vazio
+        // Altura de 1500pt deve ser suficiente para a maioria dos casos
         $pdf = Pdf::loadHTML($html)
-            ->setPaper('a4', 'portrait')
+            ->setPaper([0, 0, 842, 1500], 'portrait') // Largura A4 landscape (842pt) x Altura 1500pt
             ->setOption('margin-top', 0)
             ->setOption('margin-right', 0)
             ->setOption('margin-bottom', 0)
-            ->setOption('margin-left', 0);
+            ->setOption('margin-left', 0)
+            ->setOption('enable-smart-shrinking', false)
+            ->setOption('isHtml5ParserEnabled', true)
+            ->setOption('isRemoteEnabled', true)
+            ->setOption('enable-javascript', false)
+            ->setOption('dpi', 150);
+        
         $pdfContent = $pdf->output();
 
         // === Caminho no S3 ===
@@ -3799,7 +3943,9 @@ protected function lookupLocalAnswer(int $empId, string $question): ?string
     // 1) tenta cache em memória (rápido)
     $cacheKey = "wpp:answer_local:{$empId}:{$hash}";
     if (Cache::has($cacheKey)) {
-        return Cache::get($cacheKey);
+        $answer = Cache::get($cacheKey);
+        // IMPORTANTE: Limpa a resposta do cache também
+        return $this->cleanAIResponse($answer);
     }
 
     // 2) tenta banco
@@ -3809,8 +3955,10 @@ protected function lookupLocalAnswer(int $empId, string $question): ?string
 
     if ($row) {
         $row->increment('hits', 1, ['last_hit_at' => now()]);
-        Cache::put($cacheKey, $row->answer, now()->addHours(12));
-        return $row->answer;
+        // IMPORTANTE: Limpa a resposta do banco antes de retornar e salvar no cache
+        $cleanAnswer = $this->cleanAIResponse($row->answer);
+        Cache::put($cacheKey, $cleanAnswer, now()->addHours(12));
+        return $cleanAnswer;
     }
 
     return null;
@@ -3893,6 +4041,9 @@ protected function cosineSimilarity(array $a, array $b): float
 
 protected function storeLocalAnswer(int $empId, string $question, string $answer, string $source): void
 {
+    // IMPORTANTE: Limpa a resposta ANTES de salvar no banco
+    $answer = $this->cleanAIResponse($answer);
+    
     $normalized = mb_strtolower(preg_replace('/\s+/u', ' ', trim($question)));
     $hash = sha1($normalized);
 
@@ -4019,7 +4170,8 @@ protected function findAnswerInLocalCacheWithSimilarity(int $empId, string $ques
         \Log::info('WPP IA-LOCAL: resposta encontrada em whatsapp_qa_cache (exata)', [
             'empId' => $empId,
         ]);
-        return $rowExact->resposta;
+        // IMPORTANTE: Limpa a resposta do banco antes de retornar
+        return $this->cleanAIResponse($rowExact->resposta);
     }
 
     // 2) Similaridade (se embedding funcionar)
@@ -4059,7 +4211,8 @@ protected function findAnswerInLocalCacheWithSimilarity(int $empId, string $ques
             'empId'      => $empId,
             'similarity' => $bestSim,
         ]);
-        return $bestRow->resposta;
+        // IMPORTANTE: Limpa a resposta do banco antes de retornar
+        return $this->cleanAIResponse($bestRow->resposta);
     }
 
     return null;
@@ -4515,6 +4668,15 @@ protected function isShortcutMenuCommand(string $norm): bool
 protected function buildShortcutMenuText(WhatsappThread $thread): string
 {
     $hasEmp = !empty($thread->selected_empreendimento_id);
+    
+    // Verifica se o empreendimento é de revenda (criado pelo próprio usuário)
+    $isRevendaDoUsuario = false;
+    if ($hasEmp && $thread->selected_empreendimento_id) {
+        $emp = Empreendimento::find($thread->selected_empreendimento_id);
+        if ($emp && $emp->is_revenda == 1 && $emp->dono_corretor_id == $thread->corretor_id) {
+            $isRevendaDoUsuario = true;
+        }
+    }
 
     $txt  = "📋 *Menu de Atalhos*\n\n";
     
@@ -4534,11 +4696,17 @@ protected function buildShortcutMenuText(WhatsappThread $thread): string
         $txt .= "5️⃣ Gerar proposta em PDF de unidade\n";
         $txt .= "6️⃣ Atualizar status de unidades\n\n";
         
-        $txt .= "📸 *Galeria*\n";
-        $txt .= "7️⃣ Enviar fotos/vídeos para galeria\n\n";
+        // Opção 7 (Galeria) só aparece se for empreendimento de revenda do próprio usuário
+        if ($isRevendaDoUsuario) {
+            $txt .= "📸 *Galeria*\n";
+            $txt .= "7️⃣ Enviar fotos/vídeos para galeria\n\n";
+        }
         
         $txt .= "❓ *Perguntas*\n";
         $txt .= "8️⃣ Fazer pergunta sobre o empreendimento\n\n";
+        
+        $txt .= "📊 *Informações*\n";
+        $txt .= "9️⃣ Ver resumo do empreendimento\n\n";
         
         $txt .= "💡 *Dicas*\n";
         $txt .= "• Digite o número da opção (ex: 1, 3, 5)\n";
@@ -4561,9 +4729,6 @@ protected function buildShortcutMenuText(WhatsappThread $thread): string
         $txt .= "5️⃣ Gerar proposta em PDF\n";
         $txt .= "6️⃣ Atualizar status de unidades\n\n";
         
-        $txt .= "📸 *Galeria*\n";
-        $txt .= "7️⃣ Enviar fotos/vídeos\n\n";
-        
         $txt .= "❓ *Perguntas*\n";
         $txt .= "8️⃣ Fazer pergunta sobre empreendimento";
     }
@@ -4576,11 +4741,15 @@ protected function buildShortcutMenuText(WhatsappThread $thread): string
  */
 protected function isResumoCommand(string $norm): bool
 {
-    return Str::contains($norm, 'resumo');
+    // $norm já vem minúsculo e sem acento
+    // Aceita "resumo" ou "resumo do empreendimento"
+    $trimmed = trim($norm);
+    return $trimmed === 'resumo' || $trimmed === 'resumo do empreendimento';
 }
 
 /**
  * Monta texto de resumo (visão geral do sistema)
+ * Se houver empreendimento selecionado, consulta a IA para informações completas
  */
 protected function buildResumoText(WhatsappThread $thread): string
 {
@@ -4597,8 +4766,80 @@ protected function buildResumoText(WhatsappThread $thread): string
             if ($e->cidade) $txt .= "• {$e->cidade}";
             if ($e->uf) $txt .= "/{$e->uf}";
             if ($e->cidade || $e->uf) $txt .= "\n";
-            if ($e->endereco) $txt .= "• {$e->endereco}\n";
+            if ($e->endereco) {
+                // Remove caracteres especiais do endereço para exibição
+                $enderecoDisplay = preg_replace('/【.*?】/', '', $e->endereco);
+                $enderecoDisplay = trim($enderecoDisplay);
+                $txt .= "• {$enderecoDisplay}\n";
+            }
             $txt .= "\n";
+            
+            // Consulta a IA para informações completas do empreendimento
+            $answerFromIA = null;
+            try {
+                $question = "Me dê um resumo completo e detalhado sobre este empreendimento, incluindo características, diferenciais, amenidades, tipologias, preços e todas as informações relevantes.";
+                $answerFromIA = $this->getAnswerFromIA($thread, $question, $empId);
+            } catch (\Throwable $ex) {
+                Log::warning('Erro ao buscar resumo da IA', [
+                    'empId' => $empId,
+                    'error' => $ex->getMessage()
+                ]);
+                // Continua mesmo se der erro na IA
+            }
+            
+            // Tenta obter endereço completo: primeiro do banco, depois da resposta da IA
+            $enderecoCompleto = $this->buildEnderecoCompleto($e);
+            
+            // Verifica se o endereço do banco está incompleto (só tem cidade/UF ou está vazio)
+            $enderecoIncompleto = empty($enderecoCompleto) || 
+                (stripos($enderecoCompleto, $e->cidade ?? '') !== false && 
+                 stripos($enderecoCompleto, $e->uf ?? '') !== false && 
+                 !preg_match('/(?:avenida|av\.?|rua|alameda|praça|rodovia|estrada|travessa)/iu', $enderecoCompleto));
+            
+            // Se o endereço do banco está incompleto, tenta extrair da resposta da IA
+            if ($enderecoIncompleto && !empty($answerFromIA)) {
+                $enderecoExtraido = $this->extractAddressFromText($answerFromIA, $e);
+                if (!empty($enderecoExtraido) && strlen($enderecoExtraido) > strlen($enderecoCompleto)) {
+                    $enderecoCompleto = $enderecoExtraido;
+                }
+            }
+            
+            // Se ainda não tem endereço completo, tenta construir a partir da resposta da IA
+            if (empty($enderecoCompleto) || strlen($enderecoCompleto) < 30) {
+                // Tenta extrair da resposta da IA mesmo que o banco tenha algo
+                if (!empty($answerFromIA)) {
+                    $enderecoExtraido = $this->extractAddressFromText($answerFromIA, $e);
+                    if (!empty($enderecoExtraido)) {
+                        $enderecoCompleto = $enderecoExtraido;
+                    }
+                }
+            }
+            
+            // Adiciona endereço completo e link do Google Maps
+            if (!empty($enderecoCompleto)) {
+                // Remove caracteres especiais para exibição
+                $enderecoDisplay = preg_replace('/【.*?】/', '', $enderecoCompleto);
+                $enderecoDisplay = trim($enderecoDisplay);
+                
+                // Mostra o endereço completo
+                $txt .= "📍 *Endereço Completo:*\n";
+                $txt .= "• {$enderecoDisplay}\n\n";
+                
+                // Adiciona link do Google Maps
+                // Usa formato 'place' que o WhatsApp reconhece melhor para preview
+                $encodedAddress = urlencode($enderecoCompleto);
+                // Formato place funciona melhor no WhatsApp para mostrar thumbnail
+                // Também inclui o formato de busca como fallback
+                $mapsUrl = "https://www.google.com/maps/place/{$encodedAddress}";
+                $txt .= "🗺️ *Localização no Google Maps:*\n";
+                $txt .= "🔗 {$mapsUrl}\n\n";
+            }
+            
+            // Adiciona informações da IA
+            if (!empty($answerFromIA)) {
+                $txt .= "📋 *Informações do Empreendimento:*\n\n";
+                $txt .= $answerFromIA . "\n\n";
+            }
         }
     } else {
         $txt .= "⚠️ *Nenhum empreendimento selecionado*\n\n";
@@ -4610,11 +4851,20 @@ protected function buildResumoText(WhatsappThread $thread): string
     $txt .= "📋 *Menu* - Ver menu completo (requer empreendimento selecionado)\n\n";
     
     if ($hasEmp) {
+        // Verifica se é empreendimento de revenda do próprio usuário
+        $emp = Empreendimento::find($empId);
+        $isRevendaDoUsuario = $emp && $emp->is_revenda == 1 && $emp->dono_corretor_id == $thread->corretor_id;
+        
         $txt .= "📁 *Ver arquivos* - Listar arquivos do empreendimento\n";
         $txt .= "🏢 *Unidades livres* - Consultar disponibilidade\n";
         $txt .= "💰 *Pagamento unidade X* - Ver informações de pagamento\n";
         $txt .= "📄 *Proposta unidade X* - Gerar PDF da proposta\n";
-        $txt .= "📸 *Enviar fotos* - Adicionar mídias na galeria\n";
+        
+        // Só mostra opção de galeria se for empreendimento de revenda do usuário
+        if ($isRevendaDoUsuario) {
+            $txt .= "📸 *Enviar fotos* - Adicionar mídias na galeria\n";
+        }
+        
         $txt .= "❓ *Perguntas* - Fazer perguntas sobre o empreendimento\n\n";
         
         $txt .= "💡 Digite *menu* para ver todas as opções detalhadas.";
@@ -4624,6 +4874,187 @@ protected function buildResumoText(WhatsappThread $thread): string
     }
     
     return $txt . $this->footerControls();
+}
+
+/**
+ * Monta endereço completo do empreendimento para Google Maps
+ */
+protected function buildEnderecoCompleto(Empreendimento $emp): string
+{
+    $enderecoCompleto = '';
+    
+    // Se tiver o campo 'endereco' preenchido, usa ele como base
+    if (!empty($emp->endereco)) {
+        $enderecoCompleto = trim($emp->endereco);
+        // Remove caracteres especiais que podem estar no final do endereço
+        $enderecoCompleto = preg_replace('/【.*?】/', '', $enderecoCompleto);
+        $enderecoCompleto = trim($enderecoCompleto);
+        
+        // Adiciona cidade e UF se não estiverem já no endereço
+        // Verifica se cidade/UF já estão no endereço
+        $temCidade = !empty($emp->cidade) && stripos($enderecoCompleto, $emp->cidade) !== false;
+        $temUF = !empty($emp->uf) && stripos($enderecoCompleto, $emp->uf) !== false;
+        
+        // Se não tiver cidade/UF no endereço, adiciona
+        if (!empty($emp->cidade) && !$temCidade) {
+            $enderecoCompleto .= ', ' . trim($emp->cidade);
+        }
+        if (!empty($emp->uf) && !$temUF) {
+            $enderecoCompleto .= ', ' . trim($emp->uf);
+        }
+    } else {
+        // Se não tiver campo endereco, monta com cidade e UF
+        $enderecoParts = [];
+        if (!empty($emp->cidade)) {
+            $enderecoParts[] = trim($emp->cidade);
+        }
+        if (!empty($emp->uf)) {
+            $enderecoParts[] = trim($emp->uf);
+        }
+        if (!empty($enderecoParts)) {
+            $enderecoCompleto = implode(', ', $enderecoParts);
+        }
+    }
+    
+    return $enderecoCompleto;
+}
+
+/**
+ * Extrai endereço completo de um texto (geralmente da resposta da IA)
+ */
+protected function extractAddressFromText(string $text, Empreendimento $emp): ?string
+{
+    // Padrões para encontrar endereços no texto
+    // Procura por "Localização:", "Endereço:", ou padrões de endereço
+    $patterns = [
+        // Padrão: "**Localização**: Avenida X, ..." ou "Localização: Avenida X, ..."
+        '/\*?\*?localiza[çc][ãa]o\*?\*?\s*:?\s*([^\.\n]+(?:avenida|av\.?|rua|alameda|praça|rodovia|estrada|travessa)[^\.\n]+)/iu',
+        // Padrão: "**Endereço**: Avenida X, ..." ou "Endereço: Avenida X, ..."
+        '/\*?\*?endere[çc]o\*?\*?\s*:?\s*([^\.\n]+(?:avenida|av\.?|rua|alameda|praça|rodovia|estrada|travessa)[^\.\n]+)/iu',
+        // Padrão: "em Goiânia (Jardim Atlântico, Av. Leblon)" ou similar
+        '/\b(?:em|na|no)\s+' . preg_quote($emp->cidade ?? '', '/') . '\s*\(([^\)]+(?:avenida|av\.?|rua|alameda|praça|rodovia|estrada|travessa)[^\)]+)\)/iu',
+        // Padrão direto: Avenida/Rua + nome + número + bairro + cidade
+        '/(?:avenida|av\.?|rua|alameda|praça|rodovia|estrada|travessa)\s+[^,\n]+(?:,\s*[^,\n]+){2,}(?:,\s*' . preg_quote($emp->cidade ?? '', '/') . ')/iu',
+        // Padrão mais genérico: qualquer menção a avenida/rua seguida de bairro e cidade
+        '/(?:avenida|av\.?|rua|alameda|praça|rodovia|estrada|travessa)\s+[^,\n]+(?:,\s*[^,\n]+){1,}(?:,\s*' . preg_quote($emp->cidade ?? '', '/') . ')/iu',
+    ];
+    
+    foreach ($patterns as $pattern) {
+        if (preg_match($pattern, $text, $matches)) {
+            $endereco = trim($matches[1] ?? $matches[0] ?? '');
+            
+            // Remove caracteres especiais e markdown
+            $endereco = preg_replace('/【.*?】/', '', $endereco);
+            $endereco = preg_replace('/\*\*/', '', $endereco); // Remove markdown bold
+            $endereco = preg_replace('/\*/', '', $endereco); // Remove asteriscos
+            $endereco = trim($endereco);
+            
+            // Se encontrou algo dentro de parênteses (ex: "Jardim Atlântico, Av. Leblon")
+            // precisa reorganizar para formato de endereço
+            if (preg_match('/^([^,]+),\s*(av\.?|avenida|rua)\s+([^,]+)$/iu', $endereco, $m)) {
+                $endereco = trim($m[2] . ' ' . $m[3] . ', ' . $m[1]);
+            }
+            
+            // Verifica se tem pelo menos uma rua/avenida e parece um endereço válido
+            if (strlen($endereco) > 15 && 
+                preg_match('/(?:avenida|av\.?|rua|alameda|praça|rodovia|estrada|travessa)/iu', $endereco)) {
+                
+                // Adiciona cidade e UF se não estiverem no endereço
+                $temCidade = !empty($emp->cidade) && stripos($endereco, $emp->cidade) !== false;
+                $temUF = !empty($emp->uf) && stripos($endereco, $emp->uf) !== false;
+                
+                if (!empty($emp->cidade) && !$temCidade) {
+                    $endereco .= ', ' . trim($emp->cidade);
+                }
+                if (!empty($emp->uf) && !$temUF) {
+                    $endereco .= ', ' . trim($emp->uf);
+                }
+                
+                return $endereco;
+            }
+        }
+    }
+    
+    return null;
+}
+
+/**
+ * Obtém resposta da IA para uma pergunta sobre o empreendimento
+ * Usa o mesmo fluxo do handleNormalAIFlow mas retorna apenas o texto
+ */
+protected function getAnswerFromIA(WhatsappThread $thread, string $question, int $empId): ?string
+{
+    try {
+        /** @var VectorStoreService $svc */
+        $svc = app(VectorStoreService::class);
+        $vsId = $svc->ensureVectorStoreForEmpreendimento($empId);
+        $asstId = $svc->ensureAssistantForEmpreendimento($empId, $vsId);
+        
+        $client = OpenAI::client(config('services.openai.key'));
+        $threadKey = "wpp:thread:{$thread->phone}:{$empId}";
+        $assistantThreadId = Cache::get($threadKey);
+        
+        if (!$assistantThreadId) {
+            $th = $client->threads()->create();
+            $assistantThreadId = $th->id;
+            Cache::put($threadKey, $assistantThreadId, now()->addDays(7));
+        }
+        
+        $client->threads()->messages()->create($assistantThreadId, [
+            'role' => 'user',
+            'content' => $question,
+        ]);
+        
+        $run = $client->threads()->runs()->create($assistantThreadId, [
+            'assistant_id' => $asstId,
+        ]);
+        
+        $tries = 0;
+        $maxTries = 40;
+        $startWait = microtime(true);
+        $maxWaitSeconds = 30; // Timeout menor para resumo
+        
+        do {
+            $delayMs = $tries < 10 ? 200000 : 500000;
+            usleep($delayMs);
+            $run = $client->threads()->runs()->retrieve($assistantThreadId, $run->id);
+            $tries++;
+            
+            if ((microtime(true) - $startWait) > $maxWaitSeconds) {
+                break;
+            }
+        } while (in_array($run->status, ['queued','in_progress','cancelling']) && $tries < $maxTries);
+        
+        if ($run->status !== 'completed') {
+            return null;
+        }
+        
+        $msgs = $client->threads()->messages()->list($assistantThreadId, ['limit' => 10]);
+        $answerText = '';
+        foreach ($msgs->data as $m) {
+            if ($m->role === 'assistant') {
+                foreach ($m->content as $c) {
+                    if ($c->type === 'text') {
+                        $answerText = $c->text->value ?? '';
+                        if ($answerText !== '') break 2;
+                    }
+                }
+            }
+        }
+        
+        // Limpa referências de fonte do OpenAI
+        if (!empty($answerText)) {
+            $answerText = $this->cleanAIResponse($answerText);
+        }
+        
+        return $answerText ?: null;
+    } catch (\Throwable $e) {
+        Log::warning('Erro ao buscar resposta da IA no resumo', [
+            'error' => $e->getMessage(),
+            'empId' => $empId
+        ]);
+        return null;
+    }
 }
 
 /**
@@ -5018,5 +5449,175 @@ private function sendWppMessage(string $phone, string $text): void
     $this->sendText($phone, $text);
 }
 
+    /**
+     * Detecta endereços no texto e adiciona link do Google Maps
+     * Primeiro verifica se há endereço no banco de dados do empreendimento,
+     * depois tenta detectar no texto da resposta
+     * 
+     * @param string $text Texto da resposta
+     * @param WhatsappThread|null $thread Thread do WhatsApp (opcional)
+     * @param bool $forceAdd Força adição do link mesmo se não detectar endereço no texto
+     * @return string Texto com link do Google Maps se houver endereço
+     */
+    protected function addGoogleMapsLinkIfAddress(string $text, ?WhatsappThread $thread = null, bool $forceAdd = false): string
+    {
+        $addresses = [];
+        
+        // 1. SEMPRE prioriza o endereço do banco de dados do empreendimento
+        // NÃO tenta extrair da resposta da IA - sempre usa o do banco
+        if ($thread && $thread->selected_empreendimento_id) {
+            $emp = \App\Models\Empreendimento::find($thread->selected_empreendimento_id);
+            if ($emp) {
+                $enderecoCompleto = $this->buildEnderecoCompleto($emp);
+                
+                // SEMPRE adiciona o endereço do banco se houver empreendimento selecionado
+                // Mesmo que seja só cidade/UF, adiciona o link do Google Maps
+                // NÃO tenta extrair da resposta da IA para evitar inconsistências
+                if (!empty($enderecoCompleto)) {
+                    $addresses[] = $enderecoCompleto;
+                }
+            }
+        }
+        
+        // 2. Se não encontrou no banco e for pergunta sobre endereço, tenta detectar no texto
+        // MAS só se realmente não tiver endereço no banco
+        if (empty($addresses) && $forceAdd) {
+            // Só tenta extrair do texto se NÃO tiver endereço no banco
+            // Isso evita inconsistências - sempre prioriza o banco
+            $addressPatterns = [
+                '/(?:rua|avenida|av\.?|alameda|praça|rodovia|estrada|travessa|r\.?)\s+([^,\n]+?)(?:\s*,\s*)?(\d+)?(?:\s*[-–—]\s*)?([^,\n]*?)(?:,\s*)?([^,\n]*?)(?:,\s*)?([A-Z]{2})?/iu',
+            ];
+            
+            foreach ($addressPatterns as $pattern) {
+                if (preg_match_all($pattern, $text, $matches, PREG_SET_ORDER)) {
+                    foreach ($matches as $match) {
+                        $addressParts = array_filter(array_slice($match, 1), function($part) {
+                            $trimmed = trim($part);
+                            return !empty($trimmed) && strlen($trimmed) > 1;
+                        });
+                        
+                        if (count($addressParts) >= 2) {
+                            $address = implode(', ', $addressParts);
+                            $address = trim($address);
+                            
+                            if (strlen($address) > 15 && !in_array($address, $addresses)) {
+                                $addresses[] = $address;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        // 3. Se encontrou endereços, adiciona link do Google Maps
+        // IMPORTANTE: Só adiciona se realmente tiver endereço completo do banco
+        // Não adiciona se for apenas cidade/UF (isso causa inconsistências)
+        if (!empty($addresses)) {
+            $mapsLinks = [];
+            foreach ($addresses as $address) {
+                // Verifica se o endereço tem pelo menos rua/avenida (não é só cidade/UF)
+                $temRuaAvenida = preg_match('/(?:avenida|av\.?|rua|alameda|praça|rodovia|estrada|travessa)/iu', $address);
+                
+                // Se não tiver rua/avenida, tenta pegar do banco novamente
+                if (!$temRuaAvenida && $thread && $thread->selected_empreendimento_id) {
+                    $emp = \App\Models\Empreendimento::find($thread->selected_empreendimento_id);
+                    if ($emp && !empty($emp->endereco)) {
+                        // Usa o endereço completo do banco
+                        $address = $this->buildEnderecoCompleto($emp);
+                        $temRuaAvenida = preg_match('/(?:avenida|av\.?|rua|alameda|praça|rodovia|estrada|travessa)/iu', $address);
+                    }
+                }
+                
+                // Só adiciona o link se tiver endereço completo (com rua/avenida)
+                if ($temRuaAvenida && !empty($address)) {
+                    // Codifica o endereço para URL
+                    $encodedAddress = urlencode($address);
+                    // Formato place funciona melhor no WhatsApp para mostrar thumbnail
+                    $mapsUrl = "https://www.google.com/maps/place/{$encodedAddress}";
+                    
+                    // Verifica se o link já não está presente no texto
+                    if (strpos($text, $mapsUrl) === false) {
+                        $mapsLinks[] = "📍 *Localização:*\n🔗 {$mapsUrl}";
+                    }
+                }
+            }
+            
+            // Adiciona os links ao final do texto (apenas se houver links novos)
+            if (!empty($mapsLinks)) {
+                $text .= "\n\n" . implode("\n\n", $mapsLinks);
+            }
+        }
+        
+        return $text;
+    }
 
+    /**
+     * Limpa referências de fonte do OpenAI e ajusta formatação das respostas da IA
+     * Remove padrões como 【28:1†source】, 【28:12†source】, 【8:0†FICHA TÉCNICA PARADIZZO】, etc.
+     * 
+     * @param string $text Texto da resposta da IA
+     * @return string Texto limpo
+     */
+    protected function cleanAIResponse(string $text): string
+    {
+        if (empty($text)) {
+            return $text;
+        }
+        
+        // Remove TODAS as referências de fonte/arquivo do OpenAI
+        // Remove QUALQUER padrão 【...】 independente do conteúdo
+        // Isso garante que remove: 【8:0†FICHA TÉCNICA PARADIZZO】, 【28:1†source】, etc.
+        
+        // MÉTODO MAIS AGRESSIVO: Remove qualquer coisa entre 【 e 】 usando múltiplas abordagens
+        $iterations = 0;
+        $maxIterations = 20; // Aumenta iterações para garantir remoção completa
+        
+        while ($iterations < $maxIterations) {
+            $oldText = $text;
+            
+            // Método 1: Regex com padrão mais amplo
+            $text = preg_replace('/【[^】]*】/u', '', $text);
+            $text = preg_replace('/【.*?】/u', '', $text);
+            
+            // Método 2: Usa mb_strpos/mb_substr (mais confiável para caracteres especiais)
+            $startPos = mb_strpos($text, '【');
+            while ($startPos !== false) {
+                $endPos = mb_strpos($text, '】', $startPos);
+                if ($endPos !== false) {
+                    // Remove tudo de 【 até 】
+                    $text = mb_substr($text, 0, $startPos) . mb_substr($text, $endPos + 1);
+                } else {
+                    // Se não encontrou 】, remove apenas o 【
+                    $text = mb_substr($text, 0, $startPos) . mb_substr($text, $startPos + 1);
+                }
+                $startPos = mb_strpos($text, '【');
+            }
+            
+            // Método 3: Remove diretamente os caracteres 【 e 】 (último recurso)
+            $text = str_replace(['【', '】'], '', $text);
+            
+            // Método 4: Remove também padrões com espaços ou caracteres especiais
+            $text = preg_replace('/\s*【[^】]*】\s*/u', '', $text);
+            
+            // Se não houve mudança, para o loop
+            if ($oldText === $text) {
+                break;
+            }
+            $iterations++;
+        }
+        
+        // Remove espaços extras antes de pontuação
+        $text = preg_replace('/\s+([.,;:!?])/u', '$1', $text);
+        
+        // Remove múltiplos espaços e tabs
+        $text = preg_replace("/[ \t]+/u", ' ', $text);
+        
+        // Remove múltiplas quebras de linha
+        $text = preg_replace("/\n{3,}/u", "\n\n", $text);
+        
+        // Remove espaços no início e fim
+        $text = trim($text);
+        
+        return $text;
+    }
 }
