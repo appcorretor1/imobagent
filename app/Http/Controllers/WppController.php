@@ -24,6 +24,9 @@ use PhpOffice\PhpSpreadsheet\IOFactory;
 use App\Models\EmpreendimentoUnidade;
 use App\Models\EmpreendimentoMidia;
 use App\Services\WppSender;
+use App\Services\Crm\AssistenteService;
+use App\Services\Crm\SimpleNlpParser;
+use App\Services\Crm\CommandRouter;
 
 
 
@@ -171,7 +174,6 @@ if (str_contains($norm, 'criar empreendimento') || str_contains($norm, 'criar re
     return response()->json(['ok' => true, 'handled' => 'criar_empreendimento_start']);
 }
 
-
         $thread = WhatsappThread::firstOrCreate(
             ['phone' => $phone],
             [
@@ -277,6 +279,203 @@ if (str_contains($norm, 'criar empreendimento') || str_contains($norm, 'criar re
 
         // 🔹 tenta vincular corretor e, se existir, company_id também
 $this->attachCorretorToThread($thread, $phone);
+
+        // --------------------------------------------------------------------
+        // 🔹 SUPER-GATE: Assistente do Corretor (CRM)
+        // Detecta comandos para entrar no modo CRM
+        // DEVE SER EXECUTADO ANTES DO PROCESSAMENTO NORMAL DA IA
+        // --------------------------------------------------------------------
+        $isCrmCommand = $this->isCrmCommand($norm);
+        $context = $thread->context ?? [];
+        // IMPORTANTE: isCrmMode só é true se JÁ estiver no modo CRM (não apenas se detectou comando)
+        $isCrmMode = data_get($context, 'crm_mode', false);
+        
+        Log::info('WPP: Verificação inicial CRM', [
+            'phone' => $phone,
+            'text' => substr($text, 0, 100),
+            'norm' => substr($norm, 0, 100),
+            'isCrmCommand' => $isCrmCommand,
+            'isCrmMode' => $isCrmMode,
+            'context' => $context,
+        ]);
+        
+        // Verifica se está aguardando confirmação para entrar no assistente
+        $aguardandoConfirmacaoAssistente = data_get($context, 'aguardando_confirmacao_assistente', false);
+        
+        // Se está aguardando confirmação, verifica se a resposta é positiva
+        if ($aguardandoConfirmacaoAssistente) {
+            $confirmacao = $this->isConfirmacaoPositiva($norm);
+            if ($confirmacao) {
+                // Remove flag de confirmação e ativa modo CRM
+                unset($context['aguardando_confirmacao_assistente']);
+                $context['crm_mode'] = true;
+                $thread->context = $context;
+                $thread->save();
+                
+                // Reprocessa o comando original que estava salvo
+                $comandoOriginal = data_get($context, 'comando_assistente_original', $text);
+                
+                // Vincula corretor se ainda não estiver vinculado
+                $this->attachCorretorToThread($thread, $phone);
+                
+                if (empty($thread->corretor_id)) {
+                    $this->sendText(
+                        $phone,
+                        "⚠️ Não consegui identificar seu usuário corretor.\n" .
+                        "Verifique se seu número está cadastrado corretamente na plataforma.",
+                        null,
+                        $thread
+                    );
+                    return response()->json(['ok' => true, 'handled' => 'crm_sem_corretor']);
+                }
+
+                $corretor = User::find($thread->corretor_id);
+                if (!$corretor) {
+                    $this->sendText($phone, "❌ Erro ao identificar corretor. Tente novamente.", null, $thread);
+                    return response()->json(['ok' => true, 'handled' => 'crm_corretor_nao_encontrado']);
+                }
+
+                // Processa com o AssistenteService usando o comando original
+                try {
+                    $parser = new SimpleNlpParser();
+                    $router = new CommandRouter();
+                    $assistente = new AssistenteService($parser, $router);
+                    
+                    $resposta = $assistente->processar($thread, $corretor, $comandoOriginal);
+                    
+                    $this->sendText($phone, $resposta, null, $thread);
+                    
+                    // Registra mensagem
+                    $this->storeMessage($thread, [
+                        'sender' => 'ia',
+                        'type' => 'text',
+                        'body' => $resposta,
+                        'meta' => ['source' => 'crm_assistente'],
+                    ]);
+
+                    return response()->json(['ok' => true, 'handled' => 'crm_assistente']);
+                } catch (\Throwable $e) {
+                    Log::error('Erro no Assistente CRM', [
+                        'error' => $e->getMessage(),
+                        'trace' => $e->getTraceAsString(),
+                    ]);
+                    $this->sendText($phone, "❌ Erro ao processar. Tente novamente ou digite *sair* para voltar.", null, $thread);
+                    return response()->json(['ok' => true, 'handled' => 'crm_erro']);
+                }
+            } else {
+                // Resposta negativa ou não reconhecida - cancela e volta ao normal
+                unset($context['aguardando_confirmacao_assistente']);
+                unset($context['comando_assistente_original']);
+                $thread->context = $context;
+                $thread->save();
+                
+                $this->sendText(
+                    $phone,
+                    "Ok, continuando com as perguntas sobre o empreendimento. Como posso ajudar?",
+                    null,
+                    $thread
+                );
+                return response()->json(['ok' => true, 'handled' => 'crm_confirmacao_cancelada']);
+            }
+        }
+
+        // Se detectou comando do assistente mas NÃO está no modo assistente E tem empreendimento selecionado
+        // Pergunta se quer usar o assistente
+        if ($isCrmCommand && !$isCrmMode) {
+            $empId = $thread->selected_empreendimento_id ?? $thread->empreendimento_id;
+            
+            Log::info('WPP: Verificando se deve perguntar sobre assistente', [
+                'phone' => $phone,
+                'isCrmCommand' => $isCrmCommand,
+                'isCrmMode' => $isCrmMode,
+                'empId' => $empId,
+                'selected_empreendimento_id' => $thread->selected_empreendimento_id,
+                'empreendimento_id' => $thread->empreendimento_id,
+            ]);
+            
+            if ($empId) {
+                // Salva o comando original e pergunta se quer usar o assistente
+                $context['aguardando_confirmacao_assistente'] = true;
+                $context['comando_assistente_original'] = $text;
+                $thread->context = $context;
+                $thread->save();
+                
+                $emp = Empreendimento::find($empId);
+                $empNome = $emp ? $this->oneLine($emp->nome ?? "Empreendimento #{$empId}", 40) : "o empreendimento";
+                
+                Log::info('WPP: Perguntando se quer usar assistente', [
+                    'phone' => $phone,
+                    'empNome' => $empNome,
+                    'comando' => $text,
+                ]);
+                
+                $this->sendText(
+                    $phone,
+                    "🤖 Parece que você quer usar o *Assistente do Corretor* para registrar isso.\n\n" .
+                    "Você está atualmente em *{$empNome}* fazendo perguntas.\n\n" .
+                    "Deseja entrar no *Assistente* para registrar essa ação?\n\n" .
+                    "Responda *sim* ou *ok* para entrar no assistente, ou *não* para continuar aqui.",
+                    null,
+                    $thread
+                );
+                return response()->json(['ok' => true, 'handled' => 'crm_aguardando_confirmacao']);
+            }
+        }
+
+        // Só processa direto se JÁ estiver no modo CRM (não apenas se detectou comando)
+        if ($isCrmMode) {
+            // Vincula corretor se ainda não estiver vinculado
+            $this->attachCorretorToThread($thread, $phone);
+            
+            if (empty($thread->corretor_id)) {
+                $this->sendText(
+                    $phone,
+                    "⚠️ Não consegui identificar seu usuário corretor.\n" .
+                    "Verifique se seu número está cadastrado corretamente na plataforma."
+                );
+                return response()->json(['ok' => true, 'handled' => 'crm_sem_corretor']);
+            }
+
+            $corretor = User::find($thread->corretor_id);
+            if (!$corretor) {
+                $this->sendText($phone, "❌ Erro ao identificar corretor. Tente novamente.");
+                return response()->json(['ok' => true, 'handled' => 'crm_corretor_nao_encontrado']);
+            }
+
+            // Ativa modo CRM no contexto
+            $context = $thread->context ?? [];
+            $context['crm_mode'] = true;
+            $thread->context = $context;
+            $thread->save();
+
+            // Processa com o AssistenteService
+            try {
+                $parser = new SimpleNlpParser();
+                $router = new CommandRouter();
+                $assistente = new AssistenteService($parser, $router);
+                
+                $resposta = $assistente->processar($thread, $corretor, $text);
+                
+                $this->sendText($phone, $resposta, null, $thread);
+                
+                // Registra mensagem
+                $this->storeMessage($thread, [
+                    'sender' => 'ia',
+                    'type' => 'text',
+                    'body' => $resposta,
+                    'meta' => ['source' => 'crm_assistente'],
+                ]);
+
+                return response()->json(['ok' => true, 'handled' => 'crm_assistente']);
+            } catch (\Throwable $e) {
+                Log::error('Erro no Assistente CRM', [
+                    'error' => $e->getMessage(),
+                    'trace' => $e->getTraceAsString(),
+                ]);
+                $this->sendText($phone, "❌ Erro ao processar. Tente novamente ou digite *sair* para voltar.");
+                return response()->json(['ok' => true, 'handled' => 'crm_erro']);
+            }
+        }
 
 // -------------------------------------------------------
 // PROCESSAR MÍDIAS (foto/vídeo) ENVIADAS PELO WHATSAPP
@@ -1114,27 +1313,58 @@ if (!$shouldIgnoreSpecialCommands && $this->isResumoCommand($norm)) {
         // ===== MENU DE ATALHOS (só com empreendimento selecionado) - ANTES DE QUALQUER PROCESSAMENTO DE IA =====
 // Ignora comando "menu" se acabamos de limpar a flag do menu (mensagem deve ser processada pela IA)
 if (!$shouldIgnoreSpecialCommands && $this->isShortcutMenuCommand($norm)) {
-    // Menu só funciona se tiver empreendimento selecionado
-    if (empty($thread->selected_empreendimento_id)) {
-        return $this->sendText(
-            $phone,
-            "⚠️ Para acessar o menu, primeiro selecione um empreendimento.\n\n" .
-            "Digite *mudar empreendimento* para ver a lista de empreendimentos disponíveis." .
-            $this->footerControls()
-        );
-    }
+    // Se estiver no modo CRM, o menu deve ser processado pelo AssistenteService
+    $context = $thread->context ?? [];
+    $isCrmMode = data_get($context, 'crm_mode', false);
     
-    $menuText = $this->buildShortcutMenuText($thread);
+    if ($isCrmMode) {
+        // Em modo CRM, "menu" precisa mostrar o MENU DO ASSISTENTE (e não o menu do empreendimento).
+        // Fazemos aqui também para ficar robusto (mesmo se algum fluxo bypassar o SUPER-GATE).
+        $this->attachCorretorToThread($thread, $phone);
+        if (empty($thread->corretor_id)) {
+            return $this->sendText(
+                $phone,
+                "⚠️ Não consegui identificar seu usuário corretor.\n" .
+                "Verifique se seu número está cadastrado corretamente na plataforma.",
+                null,
+                $thread
+            );
+        }
 
-    // marca no contexto que o último comando foi "menu" (pra interpretar 1-8 depois)
-    $ctx = $thread->context ?? [];
-    $ctx['shortcut_menu'] = [
-        'shown_at' => now()->toIso8601String(),
-    ];
-    $thread->context = $ctx;
-    $thread->save();
+        $corretor = User::find($thread->corretor_id);
+        if (!$corretor) {
+            return $this->sendText($phone, "❌ Erro ao identificar corretor. Tente novamente.", null, $thread);
+        }
 
-    return $this->sendText($phone, $menuText);
+        $assistente = new AssistenteService(new SimpleNlpParser(), new CommandRouter());
+        $resposta = $assistente->processar($thread, $corretor, 'menu');
+
+        return $this->sendText($phone, $resposta, null, $thread);
+    } else {
+        // Menu só funciona se tiver empreendimento selecionado
+        if (empty($thread->selected_empreendimento_id)) {
+            return $this->sendText(
+                $phone,
+                "⚠️ Para acessar o menu, primeiro selecione um empreendimento.\n\n" .
+                "Digite *mudar empreendimento* para ver a lista de empreendimentos disponíveis." .
+                $this->footerControls(),
+                null,
+                $thread
+            );
+        }
+        
+        $menuText = $this->buildShortcutMenuText($thread);
+
+        // marca no contexto que o último comando foi "menu" (pra interpretar 1-8 depois)
+        $ctx = $thread->context ?? [];
+        $ctx['shortcut_menu'] = [
+            'shown_at' => now()->toIso8601String(),
+        ];
+        $thread->context = $ctx;
+        $thread->save();
+
+        return $this->sendText($phone, $menuText, null, $thread);
+    }
 }
 
         // ===== MODO CATÁLOGO: perguntar sobre TODOS os empreendimentos (usando texto_ia) =====
@@ -1551,6 +1781,44 @@ protected function userCanAlterUnidades(?User $user): bool
         return "\n\nDigite *mudar empreendimento* para voltar à lista, ou *menu* para ver opções.\n";
     }
 
+    /**
+     * Gera breadcrumb para indicar onde o usuário está no sistema
+     * Mostra apenas o contexto atual mais relevante, não uma hierarquia
+     */
+    protected function buildBreadcrumb(?WhatsappThread $thread = null): string
+    {
+        if (!$thread) {
+            return "🏠 *Início*\n\n";
+        }
+
+        $ctx = $thread->context ?? [];
+
+        // Prioridade 1: Modo CRM/Assistente (contexto mais específico)
+        $isCrmMode = data_get($ctx, 'crm_mode', false);
+        if ($isCrmMode) {
+            return "🤖 *Assistente*\n\n";
+        }
+
+        // Prioridade 2: Criando empreendimento
+        $isCreatingEmp = data_get($ctx, 'criando_empreendimento', false);
+        if ($isCreatingEmp) {
+            return "➕ *Criar Empreendimento*\n\n";
+        }
+
+        // Prioridade 3: Empreendimento selecionado
+        $empId = $thread->selected_empreendimento_id ?? $thread->empreendimento_id;
+        if ($empId) {
+            $emp = Empreendimento::find($empId);
+            if ($emp) {
+                $empNome = $this->oneLine($emp->nome ?? "Empreendimento #{$empId}", 40);
+                return "🏢 *{$empNome}*\n\n";
+            }
+        }
+
+        // Se não tiver nenhum contexto específico, está no início
+        return "🏠 *Início*\n\n";
+    }
+
     protected function resolveCompanyIdForThread(WhatsappThread $thread): ?int
     {
         // 1) Se a thread tiver company_id, usa.
@@ -1673,11 +1941,86 @@ protected function userCanAlterUnidades(?User $user): bool
         return $this->sendText($thread->phone, $conf);
     }
 
+    /**
+     * Busca credenciais Z-API do Company com fallback para .env
+     * 
+     * @param int|null $companyId ID da company (opcional)
+     * @return array ['base_url', 'instance', 'token', 'client_token']
+     */
+    protected function getZapiCredentials(?int $companyId = null): array
+    {
+        $baseUrl = null;
+        $instance = null;
+        $token = null;
+        $clientToken = null;
+
+        // 1. Tenta buscar do Company se tiver company_id
+        if ($companyId) {
+            try {
+                $company = \App\Models\Company::find($companyId);
+                if ($company) {
+                    $baseUrl = $company->zapi_base_url ?: null;
+                    $instance = $company->zapi_instance_id ?: null;
+                    // zapi_token é o PATH_TOKEN (token da instância que vai no path da URL)
+                    $token = $company->zapi_token ?: null;
+                }
+            } catch (\Throwable $e) {
+                // Se der erro ao buscar Company, continua sem valores (usará fallback)
+                Log::debug('WppController getZapiCredentials: Erro ao buscar Company', [
+                    'company_id' => $companyId,
+                    'error' => $e->getMessage()
+                ]);
+            }
+        }
+
+        // 2. Fallback para config/.env
+        $baseUrl = $baseUrl ?: config('services.zapi.base_url', 'https://api.z-api.io');
+        $instance = $instance ?: config('services.zapi.instance', env('ZAPI_INSTANCE_ID', ''));
+        // Fallback: primeiro tenta ZAPI_TOKEN do config, depois ZAPI_PATH_TOKEN do env
+        $token = $token ?: config('services.zapi.token', env('ZAPI_PATH_TOKEN', env('ZAPI_TOKEN', '')));
+        $clientToken = config('services.zapi.client_token', env('ZAPI_CLIENT_TOKEN', ''));
+
+        return [
+            'base_url' => $baseUrl,
+            'instance' => $instance,
+            'token' => $token,
+            'client_token' => $clientToken,
+        ];
+    }
+
     // ===== Envio WhatsApp (Z-API) =====
-protected function sendText(string $phone, string $text): array
+protected function sendText(string $phone, string $text, ?int $companyId = null, ?WhatsappThread $thread = null): array
 {
     try {
-        $res = app(\App\Services\WppSender::class)->sendText($phone, $text);
+        // Busca thread se não foi passado
+        if (!$thread) {
+            try {
+                $thread = WhatsappThread::where('phone', $phone)->first();
+            } catch (\Throwable $e) {
+                // Ignora erro
+            }
+        }
+
+        // Se não passou company_id, tenta buscar do thread se disponível
+        if (!$companyId && $thread) {
+            $companyId = $thread->company_id ?? null;
+            // Se não tiver no thread, tenta buscar do empreendimento selecionado
+            if (!$companyId && $thread->selected_empreendimento_id) {
+                $emp = Empreendimento::find($thread->selected_empreendimento_id);
+                if ($emp && $emp->company_id) {
+                    $companyId = $emp->company_id;
+                }
+            }
+        }
+        
+        // Adiciona breadcrumb no início da mensagem
+        $breadcrumb = $this->buildBreadcrumb($thread);
+        $textWithBreadcrumb = $breadcrumb . $text;
+        
+        // Cria instância do WppSender com company_id se disponível
+        // Se companyId for null, WppSender usará fallback para .env
+        $wppSender = new \App\Services\WppSender($companyId);
+        $res = $wppSender->sendText($phone, $textWithBreadcrumb);
 
         if (!($res['ok'] ?? false)) {
             Log::error('Z-API erro ao enviar texto', [
@@ -2801,9 +3144,10 @@ if ($empId)     $payload['empreendimento_id'] = $empId;
             'fileName' => $fileName,
             'mime'     => $mime,
             'caption'  => $caption,
+            'companyId'=> $companyId,
         ]);
 
-        $z = $this->sendViaZapiMedia($phone, $publicUrl, $fileName, $mime, $caption);
+        $z = $this->sendViaZapiMedia($phone, $publicUrl, $fileName, $mime, $caption, $companyId);
 
         Log::info('sendMediaSmart → Z-API: resposta', [
             'to'   => $phone,
@@ -2844,13 +3188,16 @@ if ($empId)     $payload['empreendimento_id'] = $empId;
      * - Vídeo   → send-video  (campo "video" com a URL)
      * - Documentos/PDF → send-document/pdf (campo "document" com a URL)
      */
-    private function sendViaZapiMedia(string $phone, string $fileUrl, string $fileName, string $mime, ?string $caption = null): array
+    private function sendViaZapiMedia(string $phone, string $fileUrl, string $fileName, string $mime, ?string $caption = null, ?int $companyId = null): array
     {
         try {
-            $instanceId  = env('ZAPI_INSTANCE_ID', '');
-            $pathToken   = env('ZAPI_PATH_TOKEN', '');
-            $clientToken = env('ZAPI_CLIENT_TOKEN', '');
-            $base        = "https://api.z-api.io/instances/{$instanceId}/token/{$pathToken}";
+            // Busca credenciais do Company com fallback para .env
+            $creds = $this->getZapiCredentials($companyId);
+            $instanceId  = $creds['instance'];
+            $pathToken   = $creds['token'];
+            $clientToken = $creds['client_token'];
+            $baseUrl     = rtrim($creds['base_url'], '/');
+            $base        = "{$baseUrl}/instances/{$instanceId}/token/{$pathToken}";
 
             $type = $this->classifyMediaType($mime, $fileName);
             $ext  = strtolower(pathinfo($fileName, PATHINFO_EXTENSION));
@@ -3110,13 +3457,16 @@ if ($empId)     $payload['empreendimento_id'] = $empId;
      * Usa endpoints típicos: send-image-base64 / send-document-base64 / send-video-base64
      * Ajuste se sua instância usar nomes diferentes.
      */
-    private function sendViaZapiBase64(string $phone, string $b64, string $mime, string $fileName, ?string $caption=null): array
+    private function sendViaZapiBase64(string $phone, string $b64, string $mime, string $fileName, ?string $caption=null, ?int $companyId = null): array
     {
         try {
-            $instanceId  = env('ZAPI_INSTANCE_ID', '');
-            $pathToken   = env('ZAPI_PATH_TOKEN', '');
-            $clientToken = env('ZAPI_CLIENT_TOKEN', '');
-            $base = "https://api.z-api.io/instances/{$instanceId}/token/{$pathToken}";
+            // Busca credenciais do Company com fallback para .env
+            $creds = $this->getZapiCredentials($companyId);
+            $instanceId  = $creds['instance'];
+            $pathToken   = $creds['token'];
+            $clientToken = $creds['client_token'];
+            $baseUrl     = rtrim($creds['base_url'], '/');
+            $base = "{$baseUrl}/instances/{$instanceId}/token/{$pathToken}";
 
             $type = $this->classifyMediaType($mime, $fileName);
             $endpoint = match($type) {
@@ -5549,6 +5899,93 @@ private function sendWppMessage(string $phone, string $text): void
         }
         
         return $text;
+    }
+
+    /**
+     * Verifica se o texto é um comando para entrar no modo CRM
+     */
+    protected function isCrmCommand(string $norm): bool
+    {
+        $crmKeywords = [
+            'assistente',
+            'crm',
+            'pipeline',
+            'visita',
+            'proposta',
+            'venda fechada',
+            'fechar venda',
+            'follow up',
+            'follow-up',
+            'lembrete',
+            'tarefa',
+            'pendência',
+            'resumo da semana',
+            'resumo do mês',
+            'resumo total',
+            'anotar',
+            'anotação',
+            'listar visitas',
+            'listar propostas',
+            'listar anotações',
+        ];
+
+        foreach ($crmKeywords as $keyword) {
+            if (str_contains($norm, $keyword)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Verifica se a resposta é uma confirmação positiva
+     */
+    protected function isConfirmacaoPositiva(string $norm): bool
+    {
+        $confirmacoes = [
+            'sim',
+            'ok',
+            'quero',
+            'pode',
+            'pode ser',
+            'confirmo',
+            'confirmar',
+            'correto',
+            'certo',
+            'isso mesmo',
+            'é isso',
+            'vamos',
+            'vamos lá',
+            'pode ir',
+            'pode continuar',
+        ];
+        
+        $negacoes = [
+            'não',
+            'nao',
+            'n',
+            'cancelar',
+            'cancel',
+            'voltar',
+            'desistir',
+        ];
+        
+        // Verifica negações primeiro
+        foreach ($negacoes as $negacao) {
+            if (str_contains($norm, $negacao)) {
+                return false;
+            }
+        }
+        
+        // Verifica confirmações
+        foreach ($confirmacoes as $confirmacao) {
+            if (str_contains($norm, $confirmacao)) {
+                return true;
+            }
+        }
+        
+        return false;
     }
 
     /**

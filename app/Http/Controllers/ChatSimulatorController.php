@@ -171,9 +171,25 @@ class ChatSimulatorController extends Controller
                 'line' => $e->getLine(),
             ]);
 
+            // Retorna erro em formato JSON mesmo em caso de exceção
             return response()->json([
                 'ok' => false,
-                'error' => 'Erro ao processar mensagem: ' . $e->getMessage(),
+                'error' => 'Erro ao processar mensagem. Tente novamente.',
+                'details' => config('app.debug') ? $e->getMessage() : null,
+            ], 500);
+        } catch (\Throwable $e) {
+            Log::error('Chat Simulator: Erro fatal ao processar mensagem', [
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+                'file' => $e->getFile(),
+                'line' => $e->getLine(),
+            ]);
+
+            // Retorna erro em formato JSON mesmo em caso de erro fatal
+            return response()->json([
+                'ok' => false,
+                'error' => 'Erro ao processar mensagem. Tente novamente.',
+                'details' => config('app.debug') ? $e->getMessage() : null,
             ], 500);
         }
     }
@@ -253,7 +269,26 @@ class ChatSimulatorController extends Controller
                 'file' => $e->getFile(),
                 'line' => $e->getLine(),
             ]);
-            $responseText = "Erro ao processar mensagem. Por favor, tente novamente.\n\nErro: " . $e->getMessage();
+            // Não expõe detalhes do erro ao usuário, apenas mensagem genérica
+            $responseText = "Erro ao processar mensagem. Por favor, tente novamente.";
+            
+            // Se for erro de campo não encontrado (migration não executada), tenta continuar
+            if (strpos($e->getMessage(), 'zapi_path_token') !== false || 
+                strpos($e->getMessage(), "doesn't exist") !== false ||
+                strpos($e->getMessage(), "Unknown column") !== false) {
+                Log::warning('Chat Simulator: Campo zapi_path_token não existe, usando fallback', [
+                    'error' => $e->getMessage()
+                ]);
+                // Tenta processar novamente sem o campo
+                try {
+                    $responseText = $this->processMessageDirectly($thread, $phone, $text, $norm, $user) 
+                        ?? "Mensagem recebida. Por favor, aguarde enquanto processamos.";
+                } catch (\Throwable $e2) {
+                    Log::error('Chat Simulator: Erro ao reprocessar após erro de campo', [
+                        'error' => $e2->getMessage()
+                    ]);
+                }
+            }
         }
         
         // Salva resposta do bot
@@ -309,14 +344,28 @@ class ChatSimulatorController extends Controller
                     Log::info('Chat Simulator: WppController simulado criado');
                 }
                 
-                protected function sendText(string $phone, string $text): array
+                protected function sendText(string $phone, string $text, ?int $companyId = null, ?WhatsappThread $thread = null): array
                 {
+                    // Busca thread se não foi passado
+                    if (!$thread) {
+                        try {
+                            $thread = WhatsappThread::where('phone', $phone)->first();
+                        } catch (\Throwable $e) {
+                            // Ignora erro
+                        }
+                    }
+                    
+                    // Adiciona breadcrumb no início da mensagem
+                    $breadcrumb = $this->buildBreadcrumb($thread);
+                    $textWithBreadcrumb = $breadcrumb . $text;
+                    
                     Log::info('Chat Simulator: sendText chamado (simulado)', [
-                        'text_preview' => substr($text, 0, 100),
-                        'text_length' => strlen($text),
+                        'text_preview' => substr($textWithBreadcrumb, 0, 100),
+                        'text_length' => strlen($textWithBreadcrumb),
+                        'company_id' => $companyId,
                     ]);
                     // Chama o método público captureResponse
-                    $this->simulator->captureResponse($text);
+                    $this->simulator->captureResponse($textWithBreadcrumb);
                     return ['ok' => true, 'simulated' => true];
                 }
                 
@@ -492,6 +541,45 @@ class ChatSimulatorController extends Controller
             if (!$shouldIgnoreSpecialCommands && $isMenu) {
                 Log::info('Chat Simulator: É comando menu');
                 
+                // Se estiver no modo CRM, o "menu" aqui deve ser o MENU DO ASSISTENTE (não o menu do empreendimento)
+                $ctx = $thread->context ?? [];
+                $isCrmMode = data_get($ctx, 'crm_mode', false);
+                if ($isCrmMode) {
+                    // garante corretor
+                    if (empty($thread->corretor_id)) {
+                        $attachCorretorMethod = $reflection->getMethod('attachCorretorToThread');
+                        $attachCorretorMethod->setAccessible(true);
+                        $attachCorretorMethod->invoke($wppController, $thread, $phone);
+                        $thread->refresh();
+                    }
+
+                    $corretor = $thread->corretor_id ? User::find($thread->corretor_id) : null;
+                    if (!$corretor) {
+                        $sendTextMethod = $reflection->getMethod('sendText');
+                        $sendTextMethod->setAccessible(true);
+                        $sendTextMethod->invoke(
+                            $wppController,
+                            $phone,
+                            "⚠️ Não consegui identificar seu usuário corretor.\nVerifique se seu número está cadastrado corretamente na plataforma.",
+                            null,
+                            $thread
+                        );
+                        return null;
+                    }
+
+                    $assistente = new \App\Services\Crm\AssistenteService(
+                        new \App\Services\Crm\SimpleNlpParser(),
+                        new \App\Services\Crm\CommandRouter(),
+                    );
+
+                    $resposta = $assistente->processar($thread, $corretor, 'menu');
+
+                    $sendTextMethod = $reflection->getMethod('sendText');
+                    $sendTextMethod->setAccessible(true);
+                    $sendTextMethod->invoke($wppController, $phone, $resposta, null, $thread);
+                    return null;
+                }
+
                 // Menu só funciona se tiver empreendimento selecionado
                 if (empty($thread->selected_empreendimento_id)) {
                     $footerMethod = $reflection->getMethod('footerControls');
@@ -755,6 +843,213 @@ class ChatSimulatorController extends Controller
             $thread->save();
             Log::info('Chat Simulator: Removeu flag ignore_special_commands antes de processar pela IA', ['phone' => $phone]);
             $ctx = $thread->context ?? [];
+        }
+
+        // --------------------------------------------------------------------
+        // 🔹 SUPER-GATE: Assistente do Corretor (CRM) - Chat Simulator
+        // Detecta comandos para entrar no modo CRM
+        // --------------------------------------------------------------------
+        $isCrmCommandMethod = $reflection->getMethod('isCrmCommand');
+        $isCrmCommandMethod->setAccessible(true);
+        $isCrmCommand = $isCrmCommandMethod->invoke($wppController, $norm);
+        // IMPORTANTE: isCrmMode só é true se JÁ estiver no modo CRM (não apenas se detectou comando)
+        $isCrmMode = data_get($ctx, 'crm_mode', false);
+        
+        // Verifica se está aguardando confirmação para entrar no assistente
+        $aguardandoConfirmacaoAssistente = data_get($ctx, 'aguardando_confirmacao_assistente', false);
+        
+        // Se está aguardando confirmação, verifica se a resposta é positiva
+        if ($aguardandoConfirmacaoAssistente) {
+            $isConfirmacaoPositivaMethod = $reflection->getMethod('isConfirmacaoPositiva');
+            $isConfirmacaoPositivaMethod->setAccessible(true);
+            $confirmacao = $isConfirmacaoPositivaMethod->invoke($wppController, $norm);
+            
+            if ($confirmacao) {
+                // Remove flag de confirmação e ativa modo CRM
+                unset($ctx['aguardando_confirmacao_assistente']);
+                $ctx['crm_mode'] = true;
+                $thread->context = $ctx;
+                $thread->save();
+                
+                // Reprocessa o comando original que estava salvo
+                $comandoOriginal = data_get($ctx, 'comando_assistente_original', $text);
+                
+                // Vincula corretor
+                $attachCorretorMethod = $reflection->getMethod('attachCorretorToThread');
+                $attachCorretorMethod->setAccessible(true);
+                $attachCorretorMethod->invoke($wppController, $thread, $phone);
+                
+                if (empty($thread->corretor_id)) {
+                    $sendTextMethod = $reflection->getMethod('sendText');
+                    $sendTextMethod->setAccessible(true);
+                    $sendTextMethod->invoke($wppController, $phone, 
+                        "⚠️ Não consegui identificar seu usuário corretor.\n" .
+                        "Verifique se seu número está cadastrado corretamente na plataforma.",
+                        null,
+                        $thread
+                    );
+                    return null;
+                }
+
+                $corretor = User::find($thread->corretor_id);
+                if (!$corretor) {
+                    $sendTextMethod = $reflection->getMethod('sendText');
+                    $sendTextMethod->setAccessible(true);
+                    $sendTextMethod->invoke($wppController, $phone, "❌ Erro ao identificar corretor. Tente novamente.", null, $thread);
+                    return null;
+                }
+
+                // Processa com o AssistenteService usando o comando original
+                try {
+                    $parser = new \App\Services\Crm\SimpleNlpParser();
+                    $router = new \App\Services\Crm\CommandRouter();
+                    $assistente = new \App\Services\Crm\AssistenteService($parser, $router);
+                    
+                    $resposta = $assistente->processar($thread, $corretor, $comandoOriginal);
+                    
+                    $sendTextMethod = $reflection->getMethod('sendText');
+                    $sendTextMethod->setAccessible(true);
+                    $sendTextMethod->invoke($wppController, $phone, $resposta, null, $thread);
+                    
+                    // Registra mensagem
+                    $storeMessageMethod = $reflection->getMethod('storeMessage');
+                    $storeMessageMethod->setAccessible(true);
+                    $storeMessageMethod->invoke($wppController, $thread, [
+                        'sender' => 'ia',
+                        'type' => 'text',
+                        'body' => $resposta,
+                        'meta' => ['source' => 'crm_assistente'],
+                    ]);
+
+                    return null;
+                } catch (\Throwable $e) {
+                    Log::error('Chat Simulator: Erro no Assistente CRM', [
+                        'error' => $e->getMessage(),
+                        'trace' => $e->getTraceAsString(),
+                    ]);
+                    $sendTextMethod = $reflection->getMethod('sendText');
+                    $sendTextMethod->setAccessible(true);
+                    $sendTextMethod->invoke($wppController, $phone, "❌ Erro ao processar. Tente novamente ou digite *sair* para voltar.", null, $thread);
+                    return null;
+                }
+            } else {
+                // Resposta negativa ou não reconhecida - cancela e volta ao normal
+                unset($ctx['aguardando_confirmacao_assistente']);
+                unset($ctx['comando_assistente_original']);
+                $thread->context = $ctx;
+                $thread->save();
+                
+                $sendTextMethod = $reflection->getMethod('sendText');
+                $sendTextMethod->setAccessible(true);
+                $sendTextMethod->invoke($wppController, $phone, 
+                    "Ok, continuando com as perguntas sobre o empreendimento. Como posso ajudar?",
+                    null,
+                    $thread
+                );
+                return null;
+            }
+        }
+
+        // Se detectou comando do assistente mas NÃO está no modo assistente E tem empreendimento selecionado
+        // Pergunta se quer usar o assistente
+        if ($isCrmCommand && !$isCrmMode) {
+            $empId = $thread->selected_empreendimento_id ?? $thread->empreendimento_id;
+            if ($empId) {
+                // Salva o comando original e pergunta se quer usar o assistente
+                $ctx['aguardando_confirmacao_assistente'] = true;
+                $ctx['comando_assistente_original'] = $text;
+                $thread->context = $ctx;
+                $thread->save();
+                
+                $emp = \App\Models\Empreendimento::find($empId);
+                $oneLineMethod = $reflection->getMethod('oneLine');
+                $oneLineMethod->setAccessible(true);
+                $empNome = $emp ? $oneLineMethod->invoke($wppController, $emp->nome ?? "Empreendimento #{$empId}", 40) : "o empreendimento";
+                
+                $sendTextMethod = $reflection->getMethod('sendText');
+                $sendTextMethod->setAccessible(true);
+                $sendTextMethod->invoke($wppController, $phone,
+                    "🤖 Parece que você quer usar o *Assistente do Corretor* para registrar isso.\n\n" .
+                    "Você está atualmente em *{$empNome}* fazendo perguntas.\n\n" .
+                    "Deseja entrar no *Assistente* para registrar essa ação?\n\n" .
+                    "Responda *sim* ou *ok* para entrar no assistente, ou *não* para continuar aqui.",
+                    null,
+                    $thread
+                );
+                return null;
+            }
+        }
+
+        // Só processa direto se JÁ estiver no modo CRM (não apenas se detectou comando)
+        if ($isCrmMode) {
+            Log::info('Chat Simulator: Processando comando CRM (já está no modo)', [
+                'isCrmCommand' => $isCrmCommand,
+                'isCrmMode' => $isCrmMode,
+                'norm' => $norm,
+            ]);
+
+            // Vincula corretor
+            $attachCorretorMethod = $reflection->getMethod('attachCorretorToThread');
+            $attachCorretorMethod->setAccessible(true);
+            $attachCorretorMethod->invoke($wppController, $thread, $phone);
+            
+            if (empty($thread->corretor_id)) {
+                $sendTextMethod = $reflection->getMethod('sendText');
+                $sendTextMethod->setAccessible(true);
+                $sendTextMethod->invoke($wppController, $phone, 
+                    "⚠️ Não consegui identificar seu usuário corretor.\n" .
+                    "Verifique se seu número está cadastrado corretamente na plataforma."
+                );
+                return null;
+            }
+
+            $corretor = User::find($thread->corretor_id);
+            if (!$corretor) {
+                $sendTextMethod = $reflection->getMethod('sendText');
+                $sendTextMethod->setAccessible(true);
+                $sendTextMethod->invoke($wppController, $phone, "❌ Erro ao identificar corretor. Tente novamente.");
+                return null;
+            }
+
+            // Ativa modo CRM no contexto
+            $ctx = $thread->context ?? [];
+            $ctx['crm_mode'] = true;
+            $thread->context = $ctx;
+            $thread->save();
+
+            // Processa com o AssistenteService
+            try {
+                $parser = new \App\Services\Crm\SimpleNlpParser();
+                $router = new \App\Services\Crm\CommandRouter();
+                $assistente = new \App\Services\Crm\AssistenteService($parser, $router);
+                
+                $resposta = $assistente->processar($thread, $corretor, $text);
+                
+                $sendTextMethod = $reflection->getMethod('sendText');
+                $sendTextMethod->setAccessible(true);
+                $sendTextMethod->invoke($wppController, $phone, $resposta, null, $thread);
+                
+                // Registra mensagem
+                $storeMessageMethod = $reflection->getMethod('storeMessage');
+                $storeMessageMethod->setAccessible(true);
+                $storeMessageMethod->invoke($wppController, $thread, [
+                    'sender' => 'ia',
+                    'type' => 'text',
+                    'body' => $resposta,
+                    'meta' => ['source' => 'crm_assistente'],
+                ]);
+
+                return null;
+            } catch (\Throwable $e) {
+                Log::error('Chat Simulator: Erro no Assistente CRM', [
+                    'error' => $e->getMessage(),
+                    'trace' => $e->getTraceAsString(),
+                ]);
+                $sendTextMethod = $reflection->getMethod('sendText');
+                $sendTextMethod->setAccessible(true);
+                $sendTextMethod->invoke($wppController, $phone, "❌ Erro ao processar. Tente novamente ou digite *sair* para voltar.");
+                return null;
+            }
         }
         
         // Processa perguntas normais usando handleNormalAIFlow (só se não for arquivo)

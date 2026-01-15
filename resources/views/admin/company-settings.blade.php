@@ -221,10 +221,8 @@
                     <h2 class="text-base font-semibold text-slate-900">
                         Integração WhatsApp (Z-API)
                     </h2>
-                    <p class="mt-1 text-sm text-slate-500">
-                        Configure a instância Z-API desta empresa.  
-                        Se estes campos estiverem vazios, será usado o número padrão do .env.
-                    </p>
+                  
+                   
 
                     <div class="mt-6 grid gap-6 md:grid-cols-2">
 
@@ -240,6 +238,9 @@
                                 placeholder="3EAD1E37BD2EF1DA..."
                                 class="mt-1 block w-full rounded-lg border-slate-300 shadow-sm focus:border-slate-500 focus:ring-slate-500 text-sm"
                             >
+                            <p class="mt-1 text-xs text-slate-500">
+                                ID da instância no Z-API (cada instância já tem um número do WhatsApp associado).
+                            </p>
                         </div>
 
                         <div>
@@ -255,7 +256,7 @@
                                 class="mt-1 block w-full rounded-lg border-slate-300 shadow-sm focus:border-slate-500 focus:ring-slate-500 text-sm"
                             >
                             <p class="mt-1 text-xs text-slate-500">
-                                Token da instância (não é o Security Token da conta).
+                                PATH_TOKEN (token da instância que vai no path da URL, não é o Security Token da conta).
                             </p>
                         </div>
 

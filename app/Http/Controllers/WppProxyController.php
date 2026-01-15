@@ -70,7 +70,8 @@ class WppProxyController extends Controller
 
         $baseUrl  = $company->zapi_base_url    ?: config('services.zapi.base_url');
         $instance = $company->zapi_instance_id ?: config('services.zapi.instance');
-        $token    = $company->zapi_token       ?: config('services.zapi.token');
+        // zapi_token é o PATH_TOKEN (token da instância que vai no path da URL)
+        $token    = $company->zapi_token ?: config('services.zapi.token', env('ZAPI_PATH_TOKEN', env('ZAPI_TOKEN', '')));
 
         $url = rtrim($baseUrl, '/') . "/instances/{$instance}/token/{$token}/send-text";
 

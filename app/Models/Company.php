@@ -15,7 +15,7 @@ protected $fillable = [
     'facebook_url',
     'linkedin_url',
     'zapi_instance_id',
-    'zapi_token',
+    'zapi_token',        // PATH_TOKEN (token da instância que vai no path da URL)
     'zapi_base_url',
     'settings',
 ];

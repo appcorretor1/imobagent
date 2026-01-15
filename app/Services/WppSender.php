@@ -13,19 +13,39 @@ class WppSender
     private string $token;        // token DA INSTÂNCIA (vai no path)
     private string $clientToken;  // client-token (vai no header)
 
-    public function __construct()
+    public function __construct(?int $companyId = null)
     {
-        // Z-API base
-        $this->baseUrl = rtrim((string) config('services.zapi.base_url', 'https://api.z-api.io'), '/');
+        // Busca credenciais do Company com fallback para .env
+        $baseUrl = null;
+        $instance = null;
+        $token = null;
+        $clientToken = null;
 
-        // ID da instância
-        $this->instance = (string) (env('ZAPI_INSTANCE_ID') ?: '');
+        // 1. Tenta buscar do Company se tiver company_id
+        if ($companyId) {
+            try {
+                $company = \App\Models\Company::find($companyId);
+                if ($company) {
+                    $baseUrl = $company->zapi_base_url ?: null;
+                    $instance = $company->zapi_instance_id ?: null;
+                    // zapi_token é o PATH_TOKEN (token da instância que vai no path da URL)
+                    $token = $company->zapi_token ?: null;
+                }
+            } catch (\Throwable $e) {
+                // Se der erro ao buscar Company, continua sem valores (usará fallback)
+                \Log::debug('WppSender: Erro ao buscar Company', [
+                    'company_id' => $companyId,
+                    'error' => $e->getMessage()
+                ]);
+            }
+        }
 
-        // Token da instância (o que o painel mostra no campo "Token da instância")
-        $this->token = (string) (env('ZAPI_PATH_TOKEN') ?: '');
-
-        // Client token (o que você confirmou que precisa ir no header)
-        $this->clientToken = (string) (env('ZAPI_CLIENT_TOKEN') ?: '');
+        // 2. Fallback para config/.env
+        $this->baseUrl = rtrim((string) ($baseUrl ?: config('services.zapi.base_url', 'https://api.z-api.io')), '/');
+        $this->instance = (string) ($instance ?: config('services.zapi.instance', env('ZAPI_INSTANCE_ID', '')));
+        // Fallback: primeiro tenta ZAPI_TOKEN do config, depois ZAPI_PATH_TOKEN do env
+        $this->token = (string) ($token ?: config('services.zapi.token', env('ZAPI_PATH_TOKEN', env('ZAPI_TOKEN', ''))));
+        $this->clientToken = (string) (config('services.zapi.client_token', env('ZAPI_CLIENT_TOKEN', '')));
     }
 
     private function ensureConfigured(): ?array

@@ -189,6 +189,14 @@ Route::middleware(['auth', 'verified', 'tenant'])
         Route::post('chat-simulator/send', [\App\Http\Controllers\ChatSimulatorController::class, 'sendMessage'])
             ->name('chat-simulator.send');
 
+        /*
+        |--------------------------------------------------------------------------
+        | CRM - Assistente do Corretor
+        |--------------------------------------------------------------------------
+        */
+        Route::get('crm', [\App\Http\Controllers\Admin\CrmDashboardController::class, 'index'])
+            ->name('crm.dashboard');
+
           
 
 
