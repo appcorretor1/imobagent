@@ -235,7 +235,7 @@
                         >
                     </div>
                 </div>
---->
+
                 {{-- Descrição --}}
                 <div class="mb-4">
                     <label for="descricao" class="block text-sm font-medium text-gray-700">Descrição</label>
@@ -276,7 +276,7 @@ Alameda Azul    Casa 01     fechado
                         </p>
                     </div>
                 </div>
-
+--->
                 {{-- Campos IA / JSON (avançado) --}}
                 <details class="mb-6 mt-6">
                     <summary class="cursor-pointer text-sm font-semibold text-gray-700 mb-2">
