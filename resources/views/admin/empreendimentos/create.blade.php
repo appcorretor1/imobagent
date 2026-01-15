@@ -125,7 +125,7 @@
                         </select>
                     </div>
 
-                    <div>
+                    <!--- <div>
                         <label for="tipologia" class="block text-sm font-medium text-gray-700">Tipologia</label>
                         <input
                             type="text"
@@ -135,7 +135,7 @@
                             placeholder="Ex: 2 e 3 dormitórios"
                             class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 text-sm"
                         >
-                    </div>
+                    </div> 
 
                     <div>
                         <label for="metragem" class="block text-sm font-medium text-gray-700">Metragem</label>
@@ -235,7 +235,7 @@
                         >
                     </div>
                 </div>
-
+--->
                 {{-- Descrição --}}
                 <div class="mb-4">
                     <label for="descricao" class="block text-sm font-medium text-gray-700">Descrição</label>
