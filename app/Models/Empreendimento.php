@@ -55,7 +55,7 @@ class Empreendimento extends Model
     public function scopeAtivos($query)
     {
         if (Schema::hasColumn($this->getTable(), 'ativo')) {
-            return $query->where('ativo', true);
+            return $query->whereIn('ativo', [1, true, '1']);
         }
         return $query;
     }

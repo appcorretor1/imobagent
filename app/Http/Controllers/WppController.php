@@ -1645,6 +1645,12 @@ protected function userCanAlterUnidades(?User $user): bool
         'mudar empreendimento',
         'trocar empreendimento',
         'alterar empreendimento',
+        // listar empreendimentos (atalhos comuns)
+        'ver empreendimentos',
+        'ver os empreendimentos',
+        'listar empreendimentos',
+        'mostrar empreendimentos',
+        'ver lista de empreendimentos',
         'mudar imovel',
         'trocar imovel',
         'alterar imovel',
@@ -1747,7 +1753,8 @@ protected function userCanAlterUnidades(?User $user): bool
 
     // Se tiver coluna 'ativo', filtra apenas os ATIVOS
     if (Schema::hasColumn('empreendimentos','ativo')) {
-        $q->where('ativo', 1);
+        // robusto para drivers que retornam boolean/string
+        $q->whereIn('ativo', [1, true, '1']);
     }
 
     // 🔐 Filtrar por empresa (tenant) com base na thread/corretor

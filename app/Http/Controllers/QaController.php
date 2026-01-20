@@ -54,7 +54,7 @@ class QaController extends Controller
         return view('admin.qa.chat', [
             'e' => $empreendimento,
             'messages' => $messages,
-        ]);
+]);
     }
 
     // POST: /admin/empreendimentos/{empreendimento}/perguntar
