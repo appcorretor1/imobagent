@@ -125,6 +125,19 @@ class WppProxyController extends Controller
         $fileName  = $data['fileName'] ?? ($data['filename'] ?? null);
         $caption   = $data['caption'] ?? null;
 
+        // Log dos valores extraídos ANTES da detecção do envelope
+        Log::info('WPP PROXY FROM MAKE → valores extraídos (antes detecção envelope)', [
+            'company_id' => $companyId,
+            'phone'      => $phone,
+            'has_message' => !empty($message),
+            'message_preview' => $message ? mb_substr((string)$message, 0, 150) : null,
+            'message_starts_with_brace' => $message && str_starts_with(ltrim((string)$message), '{'),
+            'has_url'    => !empty($url),
+            'mime'       => $mime,
+            'fileName'   => $fileName,
+            'caption'    => $caption ? mb_substr((string)$caption, 0, 100) : null,
+        ]);
+
         /**
          * Compatibilidade com o Make "antigo":
          * Ele envia apenas {company_id, phone, message}.
@@ -138,11 +151,39 @@ class WppProxyController extends Controller
         
         // Tenta parsear message como JSON (PRIORIDADE 1)
         if (is_string($message) && $message !== '' && str_starts_with(ltrim($message), '{')) {
-            $decoded = json_decode($message, true);
+            Log::info('WPP PROXY FROM MAKE → tentando parsear message como JSON', [
+                'message_length' => strlen($message),
+                'message_start' => mb_substr($message, 0, 100),
+            ]);
+            
+            // Limpa escapes que podem ter sido adicionados pelo regex
+            $cleanMessage = $message;
+            // Remove escapes de aspas duplas se houver
+            $cleanMessage = str_replace('\"', '"', $cleanMessage);
+            $cleanMessage = str_replace('\\"', '"', $cleanMessage);
+            
+            $decoded = json_decode($cleanMessage, true);
+            $jsonError = json_last_error();
+            
+            // Se falhar, tenta sem limpeza também
+            if ($jsonError !== JSON_ERROR_NONE) {
+                $decoded = json_decode($message, true);
+                $jsonError = json_last_error();
+            }
+            
+            Log::info('WPP PROXY FROM MAKE → resultado json_decode message', [
+                'is_array' => is_array($decoded),
+                'json_error' => $jsonError !== JSON_ERROR_NONE ? json_last_error_msg() : null,
+                'has_imobagent' => is_array($decoded) && isset($decoded['__imobagent']),
+                'imobagent_value' => is_array($decoded) ? ($decoded['__imobagent'] ?? null) : null,
+                'decoded_keys' => is_array($decoded) ? array_keys($decoded) : null,
+            ]);
+            
             if (is_array($decoded) && isset($decoded['__imobagent']) && $decoded['__imobagent'] === 'media') {
                 $jsonEnvelope = $decoded;
                 Log::info('WPP PROXY FROM MAKE → detectado envelope JSON no campo message', [
                     'has_url' => !empty($decoded['url'] ?? null),
+                    'url_preview' => !empty($decoded['url']) ? substr($decoded['url'], 0, 100) : null,
                 ]);
             }
         }
