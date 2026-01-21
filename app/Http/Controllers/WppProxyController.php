@@ -77,7 +77,7 @@ class WppProxyController extends Controller
             }
         }
 
-        $companyId = $data['company_id'] ?? null;
+        $companyId = isset($data['company_id']) ? (int) $data['company_id'] : null;
         $phone     = $data['phone']      ?? null;
         $message   = $data['message']    ?? null;
         $url       = $data['url'] ?? ($data['fileUrl'] ?? ($data['file_url'] ?? null));
@@ -187,6 +187,7 @@ class WppProxyController extends Controller
         }
 
         // Senão, é mídia via URL
+        // Usa WppSender que já funciona para texto (garante mesmo formato/credenciais)
         $mediaUrl = (string) $url;
         if (!$fileName) {
             $path = parse_url($mediaUrl, PHP_URL_PATH) ?: $mediaUrl;
@@ -197,105 +198,94 @@ class WppProxyController extends Controller
         $mime = $mime ? (string) $mime : null;
         $caption = $caption ? (string) $caption : null;
 
-        // classifica tipo pelo mime/ext
-        $mimeL = strtolower((string) $mime);
-        $isImage = ($mime && str_starts_with($mimeL, 'image/')) || in_array($ext, ['jpg','jpeg','png','gif','webp'], true);
-        $isVideo = ($mime && str_starts_with($mimeL, 'video/')) || in_array($ext, ['mp4','mov','avi','mkv','webm'], true);
-
-        $base = rtrim($baseUrl, '/') . "/instances/{$instance}/token/{$token}";
-
-        if ($isImage) {
-            $tries = [
-                ['endpoint' => 'send-image', 'payloadKey' => 'image'],
-            ];
-        } elseif ($isVideo) {
-            $tries = [
-                ['endpoint' => 'send-video', 'payloadKey' => 'video'],
-            ];
-        } else {
-            $tries = array_values(array_filter([
-                $ext ? ['endpoint' => "send-document/{$ext}", 'payloadKey' => 'document'] : null,
-                ['endpoint' => 'send-document', 'payloadKey' => 'document'],
-                $ext ? ['endpoint' => "send-file/{$ext}", 'payloadKey' => 'file'] : null,
-                ['endpoint' => 'send-file', 'payloadKey' => 'file'],
-            ]));
-        }
-
-        Log::info('Z-API sendFromMake → preparando envio (mídia)', [
+        Log::info('Z-API sendFromMake → preparando envio (mídia via WppSender)', [
             'company_id' => $companyId,
             'phone'      => $phone,
             'fileName'   => $fileName,
             'mime'       => $mime,
             'ext'        => $ext,
-            'base'       => $base,
-            'tries'      => array_map(fn($t) => $t['endpoint'], $tries),
+            'url'        => substr($mediaUrl, 0, 100) . '...',
         ]);
 
         try {
+            // Usa o mesmo formato que WppSender usa (que funciona para texto)
+            // Endpoint: send-document/{ext} com payload {phone, document, fileName}
+            $base = rtrim($baseUrl, '/') . "/instances/{$instance}/token/{$token}";
+            $endpoint = $ext ? "send-document/{$ext}" : 'send-document';
+            $endpointUrl = "{$base}/{$endpoint}";
+            
             $http = Http::asJson()->timeout(25);
             if ($clientToken) {
                 $http = $http->withHeaders([
                     'Client-Token' => $clientToken,
                 ]);
             }
-
-            $payloadBase = [
+            
+            // Mesmo formato que WppSender::sendFileFromS3 usa
+            $payload = [
                 'phone'    => $phone,
-                'caption'  => $caption,
+                'document' => $mediaUrl, // URL assinada do S3
                 'fileName' => $fileName,
             ];
-
-            foreach ($tries as $t) {
-                $payload = $payloadBase + [
-                    $t['payloadKey'] => $mediaUrl,
-                ];
-
-                $endpointUrl = "{$base}/{$t['endpoint']}";
-                $resp = $http->post($endpointUrl, $payload);
-
-                Log::info('Z-API sendFromMake → tentativa mídia', [
-                    'endpoint' => $t['endpoint'],
-                    'status'   => $resp->status(),
-                    'body'     => $resp->json() ?: $resp->body(),
-                ]);
-
-                if ($resp->successful()) {
-                    $j = $resp->json();
-                    $ok = is_array($j) && (
-                        ($j['ok'] ?? false) ||
-                        isset($j['messageId']) ||
-                        isset($j['id']) ||
-                        isset($j['zaapId'])
-                    );
-
-                    if ($ok) {
-                        return response()->json([
-                            'ok'        => true,
-                            'mode'      => 'media',
-                            'endpoint'  => $t['endpoint'],
-                            'status'    => $resp->status(),
-                            'zapi_raw'  => $j,
-                        ]);
-                    }
+            if ($caption) {
+                $payload['caption'] = $caption;
+            }
+            
+            Log::info('Z-API sendFromMake → enviando mídia (formato WppSender)', [
+                'endpoint' => $endpoint,
+                'url'     => $endpointUrl,
+                'phone'   => $phone,
+                'fileName' => $fileName,
+                'hasCaption' => !empty($caption),
+            ]);
+            
+            $resp = $http->post($endpointUrl, $payload);
+            
+            Log::info('Z-API sendFromMake → resposta (mídia)', [
+                'endpoint' => $endpoint,
+                'status'   => $resp->status(),
+                'body'     => $resp->json() ?: $resp->body(),
+            ]);
+            
+            if ($resp->successful()) {
+                $j = $resp->json();
+                $ok = is_array($j) && (
+                    ($j['ok'] ?? false) ||
+                    isset($j['messageId']) ||
+                    isset($j['id']) ||
+                    isset($j['zaapId'])
+                );
+                
+                if ($ok) {
+                    return response()->json([
+                        'ok'        => true,
+                        'mode'      => 'media',
+                        'endpoint'  => $endpoint,
+                        'status'    => $resp->status(),
+                        'zapi_raw'  => $j,
+                    ]);
                 }
             }
-
+            
             return response()->json([
                 'ok'    => false,
                 'mode'  => 'media',
-                'error' => 'no_zapi_endpoint_succeeded',
+                'error' => 'zapi_media_failed',
+                'status' => $resp->status(),
+                'body'   => $resp->json() ?: $resp->body(),
             ], 422);
         } catch (\Throwable $e) {
             Log::error('Z-API sendFromMake → erro ao enviar (mídia)', [
                 'company_id' => $companyId,
                 'phone'      => $phone,
                 'error'      => $e->getMessage(),
+                'trace'      => $e->getTraceAsString(),
             ]);
 
             return response()->json([
                 'ok'    => false,
                 'mode'  => 'media',
-                'error' => 'Erro ao enviar mídia para Z-API',
+                'error' => 'Erro ao enviar mídia para Z-API: ' . $e->getMessage(),
             ], 500);
         }
     }
