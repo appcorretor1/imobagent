@@ -3017,7 +3017,11 @@ PROMPT;
     }
 
     /**
-     * Envia mídia via Make (preferência) e, se não entregar, faz fallback direto na Z-API.
+     * Envia mídia via Make (preferência) e, se não entregar, faz fallback na Z-API.
+     *
+     * IMPORTANTE (S3 presigned):
+     * - URLs assinadas do S3 normalmente são assinadas para GET; alguns provedores fazem HEAD antes e falham (403).
+     * - Por isso, quando possível, tentamos enviar via base64 na Z-API (evita o provider baixar a URL).
      */
    private function sendMediaSmart(
     string $phone,
@@ -3066,26 +3070,41 @@ PROMPT;
             $mime = $this->guessMimeByExt($fileName);
         }
 
-        $caption = $this->normalizeCaptionForWhats($caption);
+        // legenda "humana" (para o WhatsApp). Não confundir com o payload que o Make encaminha.
+        $humanCaption = $this->normalizeCaptionForWhats($caption);
 
         Log::info('sendMediaSmart: após resolução de URL e MIME', [
             'phone'    => $phone,
             'publicUrl'=> $publicUrl,
             'fileName' => $fileName,
             'mime'     => $mime,
-            'caption'  => $caption,
+            'caption'  => $humanCaption,
         ]);
 
         // 2) Tenta Make primeiro (se configurado)
         $hook = env('MAKE_WEBHOOK_URL');
         if ($hook) {
+            /**
+             * IMPORTANTE: seu Make está configurado para chamar /api/make/wpp/send
+             * e repassar APENAS {company_id, phone, message} com message vindo do "caption".
+             * Para não exigir mudanças no Make, enviamos um "envelope" JSON dentro do caption.
+             * O WppProxyController detecta isso e envia como MÍDIA pela Z-API.
+             */
+            $makeEnvelope = json_encode([
+                '__imobagent' => 'media',
+                'url'         => $publicUrl,
+                'mime'        => $mime,
+                'fileName'    => $fileName,
+                'caption'     => $humanCaption,
+            ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+
             $payload = [
     'phone'    => preg_replace('/\D+/', '', $phone),
     'url'      => $publicUrl,
     'fileUrl'  => $publicUrl,
     'mime'     => $mime,
     'fileName' => $fileName,
-    'caption'  => $caption,
+    'caption'  => $makeEnvelope,
 ];
 
 if ($companyId) $payload['company_id'] = $companyId;
@@ -3128,7 +3147,7 @@ if ($empId)     $payload['empreendimento_id'] = $empId;
                         'via'     => 'make',
                         'url'     => $publicUrl,
                         'mime'    => $mime,
-                        'caption' => $caption,
+                        'caption' => $humanCaption,
                         'resp'    => $j,
                     ];
                 }
@@ -3145,7 +3164,45 @@ if ($empId)     $payload['empreendimento_id'] = $empId;
         }
 
         // 3) Fallback Z-API via URL (send-document/pdf etc)
-        Log::info('sendMediaSmart → Z-API: chamando sendViaZapiMedia', [
+        // 3) Fallback Z-API (prioriza base64 quando o arquivo é "pequeno o suficiente")
+        $maxB64Bytes = (int) (env('WPP_MEDIA_MAX_B64_BYTES', 12 * 1024 * 1024)); // 12MB default
+
+        $b64Payload = $this->fetchAsBase64($pathOrUrl, $disk);
+        if (!empty($b64Payload['b64']) && !empty($b64Payload['mime']) && !empty($b64Payload['fileName'])) {
+            $size = (int) ($b64Payload['size'] ?? 0);
+            Log::info('sendMediaSmart → Z-API: candidato base64', [
+                'phone'     => $phone,
+                'fileName'  => $b64Payload['fileName'],
+                'mime'      => $b64Payload['mime'],
+                'sizeBytes' => $size,
+                'maxBytes'  => $maxB64Bytes,
+            ]);
+
+            if ($size > 0 && $size <= $maxB64Bytes) {
+                $zb64 = $this->sendViaZapiBase64($phone, $b64Payload['b64'], $b64Payload['mime'], $b64Payload['fileName'], $caption, $companyId);
+                Log::info('sendMediaSmart → Z-API: resposta base64', [
+                    'to'   => $phone,
+                    'resp' => $zb64,
+                ]);
+
+                if (!empty($zb64['ok'])) {
+                    return $zb64 + [
+                        'via'      => 'z-api-base64',
+                        'mime'     => $b64Payload['mime'],
+                        'fileName' => $b64Payload['fileName'],
+                        'size'     => $size,
+                    ];
+                }
+            } else {
+                Log::warning('sendMediaSmart → Z-API: base64 ignorado (tamanho excede limite)', [
+                    'phone' => $phone,
+                    'size'  => $size,
+                ]);
+            }
+        }
+
+        // 4) Último fallback: Z-API via URL (pode falhar em presigned URL se o provider fizer HEAD)
+        Log::info('sendMediaSmart → Z-API: chamando sendViaZapiMedia (URL)', [
             'phone'    => $phone,
             'publicUrl'=> $publicUrl,
             'fileName' => $fileName,
@@ -3154,9 +3211,9 @@ if ($empId)     $payload['empreendimento_id'] = $empId;
             'companyId'=> $companyId,
         ]);
 
-        $z = $this->sendViaZapiMedia($phone, $publicUrl, $fileName, $mime, $caption, $companyId);
+        $z = $this->sendViaZapiMedia($phone, $publicUrl, $fileName, $mime, $humanCaption, $companyId);
 
-        Log::info('sendMediaSmart → Z-API: resposta', [
+        Log::info('sendMediaSmart → Z-API: resposta (URL)', [
             'to'   => $phone,
             'resp' => $z,
         ]);
@@ -3171,12 +3228,12 @@ if ($empId)     $payload['empreendimento_id'] = $empId;
         }
 
         return [
-            'ok'      => false,
-            'error'   => $z['error'] ?? 'zapi_media_failed',
-            'via'     => 'z-api',
-            'url'     => $publicUrl,
-            'mime'    => $mime,
-            'fileName'=> $fileName,
+            'ok'       => false,
+            'error'    => $z['error'] ?? 'zapi_media_failed',
+            'via'      => 'z-api',
+            'url'      => $publicUrl,
+            'mime'     => $mime,
+            'fileName' => $fileName,
         ];
     } catch (\Throwable $e) {
         Log::error('sendMediaSmart exception', [
@@ -3221,26 +3278,17 @@ if ($empId)     $payload['empreendimento_id'] = $empId;
                     ['endpoint' => 'send-video', 'payloadKey' => 'video'],
                 ];
             } else {
-                // Documentos → usa send-document/pdf, campo "document"
+                // Documentos → algumas instâncias usam send-document/{ext}, outras send-document.
                 $tries = [
-                    ['endpoint' => 'send-document/pdf', 'payloadKey' => 'document'],
+                    ['endpoint' => "send-document/{$ext}", 'payloadKey' => 'document'],
+                    ['endpoint' => 'send-document', 'payloadKey' => 'document'],
+                    // fallback mais permissivo (algumas APIs aceitam "file" / "url")
+                    ['endpoint' => "send-file/{$ext}", 'payloadKey' => 'file'],
+                    ['endpoint' => 'send-file', 'payloadKey' => 'file'],
                 ];
             }
 
-            // HEAD só para log / debug (não bloqueia o envio)
-            try {
-                $head = Http::timeout(10)->head($fileUrl);
-                \Log::info('MEDIA HEAD', [
-                    'ct'     => $head->header('Content-Type'),
-                    'cl'     => $head->header('Content-Length'),
-                    'status' => $head->status(),
-                ]);
-            } catch (\Throwable $e) {
-                \Log::warning('MEDIA HEAD exception', [
-                    'e'   => $e->getMessage(),
-                    'url' => $fileUrl,
-                ]);
-            }
+            // Não fazemos HEAD aqui: presigned URL do S3 pode retornar 403 em HEAD (assinatura por método).
 
             $payloadBase = [
                 'phone'    => preg_replace('/\D+/', '', $phone),
@@ -3423,17 +3471,12 @@ if ($empId)     $payload['empreendimento_id'] = $empId;
         try {
             // Se já for URL http(s):
             if (preg_match('#^https?://#i', $pathOrUrl)) {
-                $resp = Http::timeout(30)->withOptions(['stream' => true])->get($pathOrUrl);
+                $resp = Http::timeout(30)->get($pathOrUrl);
                 if (!$resp->successful()) {
                     throw new \RuntimeException('Download HTTP falhou: '.$resp->status());
                 }
-                $tmp = tmpfile();
-                $meta = stream_get_meta_data($tmp);
-                $fp = fopen($meta['uri'], 'w+b');
-                foreach ($resp->body() as $chunk) { fwrite($fp, $chunk); }
-                $size = filesize($meta['uri']);
-                $raw  = file_get_contents($meta['uri']);
-                fclose($fp);
+                $raw  = (string) $resp->body();
+                $size = strlen($raw);
                 $mime = $resp->header('Content-Type') ?: 'application/octet-stream';
                 $name = basename(parse_url($pathOrUrl, PHP_URL_PATH) ?: ('file_'.time()));
                 return ['b64'=>base64_encode($raw), 'mime'=>$mime, 'fileName'=>$name, 'size'=>$size];
