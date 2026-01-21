@@ -46,7 +46,9 @@ class WppProxyController extends Controller
             
             // Tenta parsear como JSON primeiro (pode ter JSON aninhado no message)
             $jsonData = json_decode($raw, true);
-            if (is_array($jsonData) && !empty($jsonData)) {
+            $jsonError = json_last_error();
+            
+            if ($jsonError === JSON_ERROR_NONE && is_array($jsonData) && !empty($jsonData)) {
                 // Se message for string JSON, tenta parsear também
                 if (isset($jsonData['message']) && is_string($jsonData['message']) && str_starts_with(ltrim($jsonData['message']), '{')) {
                     $nestedJson = json_decode($jsonData['message'], true);
@@ -67,7 +69,13 @@ class WppProxyController extends Controller
                 $data = array_merge($data, $jsonData);
                 Log::info('WPP PROXY FROM MAKE → parsing JSON bem-sucedido', ['keys' => array_keys($data)]);
             } else {
-                // Fallback: regex parsing
+                Log::warning('WPP PROXY FROM MAKE → JSON parse falhou, usando parsing manual', [
+                    'json_error' => $jsonError !== JSON_ERROR_NONE ? json_last_error_msg() : null,
+                    'raw_preview' => mb_substr($raw, 0, 200),
+                ]);
+                
+                // Fallback: parsing manual
+                // O problema é que o message contém JSON sem escape, tornando o JSON principal inválido
                 $data = [];
 
                 // company_id (aceita string ou número)
@@ -80,10 +88,67 @@ class WppProxyController extends Controller
                     $data['phone'] = $m[1];
                 }
 
-                // message (pega tudo até a última aspa, suporta JSON escapado)
-                if (preg_match('/"message"\s*:\s*"((?:[^"\\\\]|\\\\.)*)"/s', $raw, $m)) {
-                    $msg = stripcslashes($m[1]);
-                    $data['message'] = $msg;
+                // message: procura por {"__imobagent" que indica JSON de mídia
+                // Estratégia: encontra o início do JSON dentro de message e extrai até o } final
+                if (preg_match('/"message"\s*:\s*"(\{.*?\})"/s', $raw, $m)) {
+                    // Tentou regex simples, mas pode não pegar tudo
+                    $msgCandidate = $m[1] ?? null;
+                } else {
+                    // Fallback: procura diretamente por {"__imobagent
+                    $imobagentPos = strpos($raw, '{"__imobagent"');
+                    if ($imobagentPos !== false) {
+                        // Encontra o } de fechamento correspondente
+                        $pos = $imobagentPos;
+                        $len = strlen($raw);
+                        $depth = 0;
+                        $found = false;
+                        
+                        while ($pos < $len) {
+                            $char = $raw[$pos];
+                            
+                            if ($char === '{') {
+                                $depth++;
+                            } elseif ($char === '}') {
+                                $depth--;
+                                if ($depth === 0) {
+                                    // Encontrou o fechamento
+                                    $msgCandidate = substr($raw, $imobagentPos, $pos - $imobagentPos + 1);
+                                    $found = true;
+                                    break;
+                                }
+                            }
+                            
+                            $pos++;
+                        }
+                        
+                        if (!$found) {
+                            $msgCandidate = null;
+                        }
+                    } else {
+                        $msgCandidate = null;
+                    }
+                }
+                
+                if (!empty($msgCandidate)) {
+                    // Tenta parsear o JSON extraído
+                    $nestedJson = json_decode($msgCandidate, true);
+                    if (is_array($nestedJson) && isset($nestedJson['__imobagent']) && $nestedJson['__imobagent'] === 'media') {
+                        // É envelope de mídia! Extrai os campos diretamente
+                        $data['url'] = $nestedJson['url'] ?? null;
+                        $data['mime'] = $nestedJson['mime'] ?? null;
+                        $data['fileName'] = $nestedJson['fileName'] ?? ($nestedJson['filename'] ?? null);
+                        $data['caption'] = $nestedJson['caption'] ?? null;
+                        // Não precisa de message se já extraiu tudo
+                        $data['message'] = null;
+                        
+                        Log::info('WPP PROXY FROM MAKE → JSON de mídia extraído diretamente do raw', [
+                            'has_url' => !empty($data['url']),
+                            'url_preview' => !empty($data['url']) ? substr($data['url'], 0, 100) : null,
+                        ]);
+                    } else {
+                        // Não é envelope de mídia, mantém como message
+                        $data['message'] = $msgCandidate;
+                    }
                 }
 
                 // url / fileUrl / file_url
