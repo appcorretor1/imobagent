@@ -16,64 +16,87 @@ class WppProxyController extends Controller
 
         $data = $request->all();
 
-        Log::info('WPP PROXY FROM MAKE → payload recebido', [
+        // Log detalhado do payload bruto para debug
+        Log::info('WPP PROXY FROM MAKE → payload bruto recebido', [
+            'raw_length'    => strlen($raw),
+            'raw_preview'   => mb_substr($raw, 0, 500),
+            'parsed_keys'   => array_keys($data),
+            'parsed_count'  => count($data),
+        ]);
+
+        Log::info('WPP PROXY FROM MAKE → payload parseado', [
             'company_id'      => $data['company_id'] ?? null,
             'phone'           => $data['phone'] ?? null,
             'has_message'     => isset($data['message']) && $data['message'] !== '',
             'has_url'         => !empty($data['url'] ?? null) || !empty($data['fileUrl'] ?? null) || !empty($data['file_url'] ?? null),
             'message_preview' => isset($data['message'])
-                ? mb_substr((string)$data['message'], 0, 20) . '...'
+                ? mb_substr((string)$data['message'], 0, 100) . '...'
                 : null,
+            'message_is_json' => isset($data['message']) && is_string($data['message']) && str_starts_with(ltrim($data['message']), '{'),
             'fileName'        => $data['fileName'] ?? ($data['filename'] ?? null),
             'mime'            => $data['mime'] ?? null,
+            'caption'         => isset($data['caption']) ? mb_substr((string)$data['caption'], 0, 100) : null,
         ]);
 
-        // Se o Laravel não conseguir parsear (json vazio), faz parsing "na unha"
-        if (empty($data)) {
-            $data = [];
+        // Se o Laravel não conseguir parsear (json vazio ou dados inválidos), faz parsing "na unha"
+        $needsManualParsing = empty($data) || (!isset($data['company_id']) && !isset($data['phone']));
+        
+        if ($needsManualParsing && !empty($raw)) {
+            Log::info('WPP PROXY FROM MAKE → fazendo parsing manual do raw');
+            
+            // Tenta parsear como JSON primeiro
+            $jsonData = json_decode($raw, true);
+            if (is_array($jsonData) && !empty($jsonData)) {
+                $data = array_merge($data, $jsonData);
+                Log::info('WPP PROXY FROM MAKE → parsing JSON bem-sucedido', ['keys' => array_keys($data)]);
+            } else {
+                // Fallback: regex parsing
+                $data = [];
 
-            // company_id
-            if (preg_match('/"company_id"\s*:\s*"([^"]*)"/', $raw, $m)) {
-                $data['company_id'] = $m[1];
-            }
+                // company_id (aceita string ou número)
+                if (preg_match('/"company_id"\s*:\s*"?([^",}\]]+)"?/', $raw, $m)) {
+                    $data['company_id'] = trim($m[1], '"');
+                }
 
-            // phone
-            if (preg_match('/"phone"\s*:\s*"([^"]*)"/', $raw, $m)) {
-                $data['phone'] = $m[1];
-            }
+                // phone
+                if (preg_match('/"phone"\s*:\s*"([^"]*)"/', $raw, $m)) {
+                    $data['phone'] = $m[1];
+                }
 
-            // message (pega tudo até a última aspa)
-            if (preg_match('/"message"\s*:\s*"(.*)"/s', $raw, $m)) {
-                // remove escapes de barra e aspas
-                $msg = stripcslashes($m[1]);
-                $data['message'] = $msg;
-            }
+                // message (pega tudo até a última aspa, suporta JSON escapado)
+                if (preg_match('/"message"\s*:\s*"((?:[^"\\\\]|\\\\.)*)"/s', $raw, $m)) {
+                    $msg = stripcslashes($m[1]);
+                    $data['message'] = $msg;
+                }
 
-            // url / fileUrl / file_url
-            if (preg_match('/"url"\s*:\s*"([^"]*)"/s', $raw, $m)) {
-                $data['url'] = stripcslashes($m[1]);
-            }
-            if (preg_match('/"fileUrl"\s*:\s*"([^"]*)"/s', $raw, $m)) {
-                $data['fileUrl'] = stripcslashes($m[1]);
-            }
-            if (preg_match('/"file_url"\s*:\s*"([^"]*)"/s', $raw, $m)) {
-                $data['file_url'] = stripcslashes($m[1]);
-            }
+                // url / fileUrl / file_url
+                if (preg_match('/"url"\s*:\s*"([^"]*)"/s', $raw, $m)) {
+                    $data['url'] = stripcslashes($m[1]);
+                }
+                if (preg_match('/"fileUrl"\s*:\s*"([^"]*)"/s', $raw, $m)) {
+                    $data['fileUrl'] = stripcslashes($m[1]);
+                }
+                if (preg_match('/"file_url"\s*:\s*"([^"]*)"/s', $raw, $m)) {
+                    $data['file_url'] = stripcslashes($m[1]);
+                }
 
-            // fileName
-            if (preg_match('/"fileName"\s*:\s*"([^"]*)"/s', $raw, $m)) {
-                $data['fileName'] = stripcslashes($m[1]);
-            }
+                // fileName
+                if (preg_match('/"fileName"\s*:\s*"([^"]*)"/s', $raw, $m)) {
+                    $data['fileName'] = stripcslashes($m[1]);
+                }
 
-            // mime
-            if (preg_match('/"mime"\s*:\s*"([^"]*)"/s', $raw, $m)) {
-                $data['mime'] = stripcslashes($m[1]);
-            }
+                // mime
+                if (preg_match('/"mime"\s*:\s*"([^"]*)"/s', $raw, $m)) {
+                    $data['mime'] = stripcslashes($m[1]);
+                }
 
-            // caption
-            if (preg_match('/"caption"\s*:\s*"(.*)"/s', $raw, $m)) {
-                $cap = stripcslashes($m[1]);
-                $data['caption'] = $cap;
+                // caption (pode conter JSON escapado)
+                if (preg_match('/"caption"\s*:\s*"((?:[^"\\\\]|\\\\.)*)"/s', $raw, $m)) {
+                    $cap = stripcslashes($m[1]);
+                    $data['caption'] = $cap;
+                }
+                
+                Log::info('WPP PROXY FROM MAKE → parsing regex concluído', ['keys' => array_keys($data)]);
             }
         }
 
@@ -89,19 +112,47 @@ class WppProxyController extends Controller
          * Compatibilidade com o Make "antigo":
          * Ele envia apenas {company_id, phone, message}.
          * Se message for um JSON contendo url/mime/fileName/caption, tratamos como envio de mídia.
+         * 
+         * IMPORTANTE: O Make pode enviar o envelope JSON no campo "message" OU no campo "caption".
          */
+        $jsonEnvelope = null;
+        
+        // Tenta parsear message como JSON
         if (!$url && is_string($message) && $message !== '' && str_starts_with(ltrim($message), '{')) {
             $decoded = json_decode($message, true);
-            if (is_array($decoded)) {
-                $maybeUrl = $decoded['url'] ?? ($decoded['fileUrl'] ?? ($decoded['file_url'] ?? null));
-                if (!empty($maybeUrl)) {
-                    $url = $maybeUrl;
-                    $mime = $mime ?: ($decoded['mime'] ?? null);
-                    $fileName = $fileName ?: ($decoded['fileName'] ?? ($decoded['filename'] ?? null));
-                    $caption = $caption ?: ($decoded['caption'] ?? null);
-                    // evita mandar texto "message" se na verdade é mídia
-                    $message = null;
-                }
+            if (is_array($decoded) && isset($decoded['__imobagent']) && $decoded['__imobagent'] === 'media') {
+                $jsonEnvelope = $decoded;
+                Log::info('WPP PROXY FROM MAKE → detectado envelope JSON no campo message', [
+                    'has_url' => !empty($decoded['url'] ?? null),
+                ]);
+            }
+        }
+        
+        // Tenta parsear caption como JSON (fallback)
+        if (!$jsonEnvelope && is_string($caption) && $caption !== '' && str_starts_with(ltrim($caption), '{')) {
+            $decoded = json_decode($caption, true);
+            if (is_array($decoded) && isset($decoded['__imobagent']) && $decoded['__imobagent'] === 'media') {
+                $jsonEnvelope = $decoded;
+                Log::info('WPP PROXY FROM MAKE → detectado envelope JSON no campo caption');
+            }
+        }
+        
+        // Se encontrou envelope JSON, extrai os dados
+        if ($jsonEnvelope) {
+            $maybeUrl = $jsonEnvelope['url'] ?? ($jsonEnvelope['fileUrl'] ?? ($jsonEnvelope['file_url'] ?? null));
+            if (!empty($maybeUrl)) {
+                $url = $maybeUrl;
+                $mime = $mime ?: ($jsonEnvelope['mime'] ?? null);
+                $fileName = $fileName ?: ($jsonEnvelope['fileName'] ?? ($jsonEnvelope['filename'] ?? null));
+                $caption = $jsonEnvelope['caption'] ?? $caption; // mantém caption humano se existir
+                // evita mandar texto "message" se na verdade é mídia
+                $message = null;
+                
+                Log::info('WPP PROXY FROM MAKE → extraído do envelope JSON', [
+                    'url'      => substr($url, 0, 100) . '...',
+                    'mime'     => $mime,
+                    'fileName' => $fileName,
+                ]);
             }
         }
 
