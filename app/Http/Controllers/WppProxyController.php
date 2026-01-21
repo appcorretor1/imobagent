@@ -44,9 +44,26 @@ class WppProxyController extends Controller
         if ($needsManualParsing && !empty($raw)) {
             Log::info('WPP PROXY FROM MAKE → fazendo parsing manual do raw');
             
-            // Tenta parsear como JSON primeiro
+            // Tenta parsear como JSON primeiro (pode ter JSON aninhado no message)
             $jsonData = json_decode($raw, true);
             if (is_array($jsonData) && !empty($jsonData)) {
+                // Se message for string JSON, tenta parsear também
+                if (isset($jsonData['message']) && is_string($jsonData['message']) && str_starts_with(ltrim($jsonData['message']), '{')) {
+                    $nestedJson = json_decode($jsonData['message'], true);
+                    if (is_array($nestedJson)) {
+                        // Se for envelope de mídia, extrai os campos diretamente
+                        if (isset($nestedJson['__imobagent']) && $nestedJson['__imobagent'] === 'media') {
+                            $jsonData['url'] = $nestedJson['url'] ?? ($jsonData['url'] ?? null);
+                            $jsonData['mime'] = $nestedJson['mime'] ?? ($jsonData['mime'] ?? null);
+                            $jsonData['fileName'] = $nestedJson['fileName'] ?? ($jsonData['fileName'] ?? null);
+                            $jsonData['caption'] = $nestedJson['caption'] ?? ($jsonData['caption'] ?? null);
+                            // Mantém message como string para detecção posterior, mas já tem url
+                            Log::info('WPP PROXY FROM MAKE → JSON aninhado detectado e extraído', [
+                                'has_url' => !empty($jsonData['url']),
+                            ]);
+                        }
+                    }
+                }
                 $data = array_merge($data, $jsonData);
                 Log::info('WPP PROXY FROM MAKE → parsing JSON bem-sucedido', ['keys' => array_keys($data)]);
             } else {
@@ -114,11 +131,13 @@ class WppProxyController extends Controller
          * Se message for um JSON contendo url/mime/fileName/caption, tratamos como envio de mídia.
          * 
          * IMPORTANTE: O Make pode enviar o envelope JSON no campo "message" OU no campo "caption".
+         * 
+         * PRIORIDADE: Verifica envelope JSON ANTES de decidir se é texto ou mídia.
          */
         $jsonEnvelope = null;
         
-        // Tenta parsear message como JSON
-        if (!$url && is_string($message) && $message !== '' && str_starts_with(ltrim($message), '{')) {
+        // Tenta parsear message como JSON (PRIORIDADE 1)
+        if (is_string($message) && $message !== '' && str_starts_with(ltrim($message), '{')) {
             $decoded = json_decode($message, true);
             if (is_array($decoded) && isset($decoded['__imobagent']) && $decoded['__imobagent'] === 'media') {
                 $jsonEnvelope = $decoded;
@@ -128,7 +147,7 @@ class WppProxyController extends Controller
             }
         }
         
-        // Tenta parsear caption como JSON (fallback)
+        // Tenta parsear caption como JSON (PRIORIDADE 2 - fallback)
         if (!$jsonEnvelope && is_string($caption) && $caption !== '' && str_starts_with(ltrim($caption), '{')) {
             $decoded = json_decode($caption, true);
             if (is_array($decoded) && isset($decoded['__imobagent']) && $decoded['__imobagent'] === 'media') {
@@ -137,7 +156,7 @@ class WppProxyController extends Controller
             }
         }
         
-        // Se encontrou envelope JSON, extrai os dados
+        // Se encontrou envelope JSON, extrai os dados e FORÇA modo mídia
         if ($jsonEnvelope) {
             $maybeUrl = $jsonEnvelope['url'] ?? ($jsonEnvelope['fileUrl'] ?? ($jsonEnvelope['file_url'] ?? null));
             if (!empty($maybeUrl)) {
@@ -145,13 +164,18 @@ class WppProxyController extends Controller
                 $mime = $mime ?: ($jsonEnvelope['mime'] ?? null);
                 $fileName = $fileName ?: ($jsonEnvelope['fileName'] ?? ($jsonEnvelope['filename'] ?? null));
                 $caption = $jsonEnvelope['caption'] ?? $caption; // mantém caption humano se existir
-                // evita mandar texto "message" se na verdade é mídia
+                // CRÍTICO: anula message para forçar modo mídia
                 $message = null;
                 
-                Log::info('WPP PROXY FROM MAKE → extraído do envelope JSON', [
+                Log::info('WPP PROXY FROM MAKE → extraído do envelope JSON (modo mídia)', [
                     'url'      => substr($url, 0, 100) . '...',
                     'mime'     => $mime,
                     'fileName' => $fileName,
+                    'message_null' => true,
+                ]);
+            } else {
+                Log::warning('WPP PROXY FROM MAKE → envelope JSON sem URL válida', [
+                    'envelope_keys' => array_keys($jsonEnvelope),
                 ]);
             }
         }
