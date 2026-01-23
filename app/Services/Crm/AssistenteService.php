@@ -24,7 +24,7 @@ class AssistenteService
         private CommandRouter $router,
     ) {}
 
-    public function processar(WhatsappThread $thread, User $corretor, string $texto): string
+    public function processar(WhatsappThread $thread, User $corretor, string $texto): ?string
     {
         $context = $thread->context ?? [];
         $intent = $this->parser->parse($texto, $context);
@@ -49,7 +49,7 @@ class AssistenteService
             'nova_anotacao' => $this->criarAnotacao($intent, $thread, $corretor),
             'listar_anotacoes' => $this->listarAnotacoes($intent, $thread, $corretor),
             'resumo' => $this->gerarResumo($intent, $thread, $corretor),
-            default => $this->criarAnotacao($intent, $thread, $corretor), // Fallback: qualquer texto vira anotação
+            default => null, // Intent desconhecido - não processa como anotação, deixa o WppController decidir
         };
     }
 

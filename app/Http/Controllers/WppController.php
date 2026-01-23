@@ -343,6 +343,23 @@ $this->attachCorretorToThread($thread, $phone);
                     
                     $resposta = $assistente->processar($thread, $corretor, $comandoOriginal);
                     
+                    // Se retornar null, significa que não é um comando CRM válido
+                    if ($resposta === null) {
+                        // Sai do modo CRM e processa como pergunta normal
+                        unset($context['crm_mode']);
+                        $thread->context = $context;
+                        $thread->save();
+                        
+                        Log::info('WPP: Comando não reconhecido no CRM após confirmação, redirecionando para IA normal', [
+                            'phone' => $phone,
+                            'text' => $comandoOriginal,
+                        ]);
+                        
+                        // Continua o fluxo normal (não retorna aqui, deixa cair no handleNormalAIFlow)
+                        // Mas primeiro precisa processar a mensagem normalmente
+                        return $this->handleNormalAIFlow($thread, $comandoOriginal);
+                    }
+                    
                     $this->sendText($phone, $resposta, null, $thread);
                     
                     // Registra mensagem
@@ -431,14 +448,16 @@ $this->attachCorretorToThread($thread, $phone);
                 $this->sendText(
                     $phone,
                     "⚠️ Não consegui identificar seu usuário corretor.\n" .
-                    "Verifique se seu número está cadastrado corretamente na plataforma."
+                    "Verifique se seu número está cadastrado corretamente na plataforma.",
+                    null,
+                    $thread
                 );
                 return response()->json(['ok' => true, 'handled' => 'crm_sem_corretor']);
             }
 
             $corretor = User::find($thread->corretor_id);
             if (!$corretor) {
-                $this->sendText($phone, "❌ Erro ao identificar corretor. Tente novamente.");
+                $this->sendText($phone, "❌ Erro ao identificar corretor. Tente novamente.", null, $thread);
                 return response()->json(['ok' => true, 'handled' => 'crm_corretor_nao_encontrado']);
             }
 
@@ -454,25 +473,68 @@ $this->attachCorretorToThread($thread, $phone);
                 $router = new CommandRouter();
                 $assistente = new AssistenteService($parser, $router);
                 
+                // Verifica o intent antes de processar para detectar "sair"
+                $intent = $parser->parse($text, $context);
+                $isSairCommand = $intent->intent === 'sair';
+                
                 $resposta = $assistente->processar($thread, $corretor, $text);
                 
-                $this->sendText($phone, $resposta, null, $thread);
+                // Se for comando "sair", lista os empreendimentos
+                if ($isSairCommand && $resposta === null) {
+                    Log::info('WPP: Comando sair detectado, listando empreendimentos', [
+                        'phone' => $phone,
+                    ]);
+                    
+                    // Lista os empreendimentos para o usuário escolher
+                    // sendEmpreendimentosList já envia a mensagem e retorna o resultado de sendText
+                    $result = $this->sendEmpreendimentosList($thread);
+                    
+                    // Registra mensagem
+                    $this->storeMessage($thread, [
+                        'sender' => 'system',
+                        'type' => 'text',
+                        'body' => 'Lista de empreendimentos enviada após sair do assistente',
+                        'meta' => ['source' => 'crm_sair'],
+                    ]);
+                    
+                    return response()->json(['ok' => true, 'handled' => 'crm_sair_lista_emp', 'send_result' => $result]);
+                }
                 
-                // Registra mensagem
-                $this->storeMessage($thread, [
-                    'sender' => 'ia',
-                    'type' => 'text',
-                    'body' => $resposta,
-                    'meta' => ['source' => 'crm_assistente'],
-                ]);
+                // Se a resposta for null, significa que o intent é desconhecido e não é um comando CRM
+                // Nesse caso, sai do modo CRM e processa como pergunta normal
+                if ($resposta === null) {
+                    // Sai do modo CRM e processa como pergunta normal
+                    unset($context['crm_mode']);
+                    $thread->context = $context;
+                    $thread->save();
+                    
+                    Log::info('WPP: Intent desconhecido no CRM, saindo do modo CRM e redirecionando para IA normal', [
+                        'phone' => $phone,
+                        'text' => $text,
+                    ]);
+                    
+                    // Processa como pergunta normal pela IA
+                    return $this->handleNormalAIFlow($thread, $text);
+                } else {
+                    // É um comando CRM válido, retorna a resposta
+                    $this->sendText($phone, $resposta, null, $thread);
+                    
+                    // Registra mensagem
+                    $this->storeMessage($thread, [
+                        'sender' => 'ia',
+                        'type' => 'text',
+                        'body' => $resposta,
+                        'meta' => ['source' => 'crm_assistente'],
+                    ]);
 
-                return response()->json(['ok' => true, 'handled' => 'crm_assistente']);
+                    return response()->json(['ok' => true, 'handled' => 'crm_assistente']);
+                }
             } catch (\Throwable $e) {
                 Log::error('Erro no Assistente CRM', [
                     'error' => $e->getMessage(),
                     'trace' => $e->getTraceAsString(),
                 ]);
-                $this->sendText($phone, "❌ Erro ao processar. Tente novamente ou digite *sair* para voltar.");
+                $this->sendText($phone, "❌ Erro ao processar. Tente novamente ou digite *sair* para voltar.", null, $thread);
                 return response()->json(['ok' => true, 'handled' => 'crm_erro']);
             }
         }
@@ -1924,9 +1986,9 @@ protected function userCanAlterUnidades(?User $user): bool
         $thread->state = 'idle';
         $this->clearEmpMap($thread);
 
-        // limpa catálogo também ao selecionar
+        // limpa catálogo e modo CRM também ao selecionar empreendimento
         $ctx = $thread->context ?? [];
-        unset($ctx['catalog_map'], $ctx['catalog_created_at']);
+        unset($ctx['catalog_map'], $ctx['catalog_created_at'], $ctx['crm_mode']);
         $thread->context = $ctx;
 
         $thread->save();
@@ -2262,6 +2324,19 @@ $pdfPath = $this->buildAndStoreProposalPdf(
             $answerFromTexto = $this->answerFromTextoIa($e, $question);
 
             if (!empty($answerFromTexto)) {
+                // Verifica se a resposta indica "não sei"
+                $answerLower = mb_strtolower(trim($answerFromTexto));
+                $indicatesUnknown = preg_match('/\b(não\s+(sei|tenho|encontrei|consegui|disponho)|não\s+posso|não\s+tenho\s+essa|não\s+encontrei\s+essa|não\s+consegui\s+encontrar|não\s+disponho|informação\s+não\s+disponível|não\s+tenho\s+acesso|não\s+tenho\s+informação)\b/iu', $answerLower);
+                
+                if ($indicatesUnknown) {
+                    // IA não soube responder - notifica diretor
+                    $this->notifyDirectorAboutUnknownQuestion($thread, $question, $empId);
+                    
+                    // Adiciona informação sobre notificação ao diretor
+                    $answerFromTexto = $answerFromTexto . "\n\n" .
+                                     "Vou enviar sua pergunta para o diretor, que entrará em contato em breve.";
+                }
+                
                 // calcula latência
                 $latencyMs  = (int) round((microtime(true) - $t0) * 1000);
                 $latencySec = round($latencyMs / 1000, 3);
@@ -2366,8 +2441,23 @@ $pdfPath = $this->buildAndStoreProposalPdf(
             }
         }
 
-        if ($answerText === '') {
-            $answerText = "Não encontrei essa informação nos documentos. Pode reformular sua pergunta?";
+        // Verifica se a IA não soube responder (resposta vazia ou indicações de "não sei")
+        $answerLower = mb_strtolower(trim($answerText));
+        $indicatesUnknown = empty($answerText) || 
+                           preg_match('/\b(não\s+(sei|tenho|encontrei|consegui|disponho)|não\s+posso|não\s+tenho\s+essa|não\s+encontrei\s+essa|não\s+consegui\s+encontrar|não\s+disponho|informação\s+não\s+disponível|não\s+tenho\s+acesso|não\s+tenho\s+informação)\b/iu', $answerLower);
+        
+        if ($indicatesUnknown) {
+            // IA não soube responder - notifica diretor
+            $this->notifyDirectorAboutUnknownQuestion($thread, $question, $empId);
+            
+            if (empty($answerText)) {
+                $answerText = "Desculpe, não encontrei essa informação nos documentos.\n\n" .
+                             "Vou enviar sua pergunta para o diretor, que entrará em contato em breve.";
+            } else {
+                // Se a resposta já indica "não sei", adiciona a informação sobre notificação ao diretor
+                $answerText = $answerText . "\n\n" .
+                             "Vou enviar sua pergunta para o diretor, que entrará em contato em breve.";
+            }
         }
 
         // LIMPEZA DE CITAÇÕES E AJUSTE DE PONTUAÇÃO
@@ -2603,6 +2693,119 @@ PROMPT;
                 'error' => $ex->getMessage(),
             ]);
             return null; // em caso de erro, também deixa o fluxo seguir pro Vector Store
+        }
+    }
+
+    /**
+     * Notifica o diretor quando a IA não soube responder uma pergunta.
+     *
+     * @param WhatsappThread $thread
+     * @param string $question Pergunta que não foi respondida
+     * @param int|null $empId ID do empreendimento (opcional)
+     */
+    protected function notifyDirectorAboutUnknownQuestion(WhatsappThread $thread, string $question, ?int $empId = null): void
+    {
+        try {
+            $companyId = $this->resolveCompanyIdForThread($thread);
+            
+            if (!$companyId) {
+                Log::warning('WPP: Não foi possível notificar diretor - company_id não encontrado', [
+                    'phone' => $thread->phone,
+                    'empId' => $empId,
+                ]);
+                return;
+            }
+            
+            // Busca diretor da empresa
+            $diretor = \App\Models\User::where('company_id', $companyId)
+                ->where('role', 'diretor')
+                ->where('is_active', true)
+                ->first();
+            
+            if (!$diretor) {
+                Log::warning('WPP: Diretor não encontrado para notificação', [
+                    'company_id' => $companyId,
+                    'phone' => $thread->phone,
+                ]);
+                return;
+            }
+            
+            // Prepara informações do corretor
+            $corretorInfo = '';
+            if ($thread->corretor_id) {
+                $corretor = \App\Models\User::find($thread->corretor_id);
+                if ($corretor) {
+                    $corretorInfo = "\n👤 *Corretor:* {$corretor->name}";
+                    if ($corretor->phone) {
+                        $corretorInfo .= " ({$corretor->phone})";
+                    }
+                }
+            }
+            
+            // Prepara informações do empreendimento
+            $empInfo = '';
+            if ($empId) {
+                $emp = \App\Models\Empreendimento::find($empId);
+                if ($emp) {
+                    $empInfo = "\n🏢 *Empreendimento:* {$emp->nome}";
+                }
+            }
+            
+            // Monta mensagem para o diretor
+            $message = "🔔 *Nova pergunta não respondida*\n\n" .
+                      "❓ *Pergunta:* {$question}" .
+                      $corretorInfo .
+                      $empInfo .
+                      "\n\n📱 *Telefone:* {$thread->phone}" .
+                      "\n\n_Esta pergunta foi feita via WhatsApp e a IA não conseguiu responder._";
+            
+            // Envia mensagem para o diretor
+            $diretorPhone = $diretor->whatsapp ?? $diretor->phone;
+            
+            if ($diretorPhone) {
+                // Remove caracteres não numéricos
+                $diretorPhone = preg_replace('/\D+/', '', $diretorPhone);
+                
+                // Usa WppSender diretamente para garantir envio real (mesmo no simulador)
+                // Isso evita que o simulador intercepte a mensagem ao diretor
+                try {
+                    $wppSender = new \App\Services\WppSender($companyId);
+                    $result = $wppSender->sendText($diretorPhone, $message);
+                    
+                    if ($result['ok'] ?? false) {
+                        Log::info('WPP: Diretor notificado sobre pergunta não respondida', [
+                            'diretor_id' => $diretor->id,
+                            'diretor_phone' => $diretorPhone,
+                            'question' => $question,
+                            'company_id' => $companyId,
+                        ]);
+                    } else {
+                        Log::warning('WPP: Falha ao enviar notificação ao diretor', [
+                            'diretor_id' => $diretor->id,
+                            'diretor_phone' => $diretorPhone,
+                            'result' => $result,
+                        ]);
+                    }
+                } catch (\Throwable $e) {
+                    Log::error('WPP: Erro ao enviar notificação ao diretor via WppSender', [
+                        'diretor_id' => $diretor->id,
+                        'diretor_phone' => $diretorPhone,
+                        'error' => $e->getMessage(),
+                    ]);
+                }
+            } else {
+                Log::warning('WPP: Diretor não tem telefone cadastrado para notificação', [
+                    'diretor_id' => $diretor->id,
+                    'company_id' => $companyId,
+                ]);
+            }
+            
+        } catch (\Throwable $e) {
+            Log::error('WPP: Erro ao notificar diretor', [
+                'error' => $e->getMessage(),
+                'phone' => $thread->phone,
+                'question' => $question,
+            ]);
         }
     }
 

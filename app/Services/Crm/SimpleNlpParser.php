@@ -22,7 +22,7 @@ class SimpleNlpParser implements NlpParserInterface
         'fechar_venda' => ['venda fechada', 'fechar venda', 'venda para', 'vender para', 'venda de'],
         'novo_followup' => ['follow up', 'follow-up', 'lembrar', 'lembrete', 'tarefa', 'lembrar de'],
         'listar_followups' => ['follow ups', 'follow-ups', 'lembretes', 'tarefas', 'pendências', 'minhas pendências'],
-        'nova_anotacao' => ['anotar', 'anotação', 'anotacao', 'nota', 'salvar', 'guardar'],
+        'nova_anotacao' => ['anotar', 'anotação', 'anotacao', 'fazer anotação', 'fazer anotacao', 'criar anotação', 'criar anotacao', 'adicionar anotação', 'adicionar anotacao'],
         'listar_anotacoes' => ['listar anotações', 'listar anotacoes', 'listar anotacao', 'minhas anotações', 'minhas anotacoes', 'ver anotações', 'ver anotacoes', 'mostrar anotações', 'mostrar anotacoes'],
         'resumo' => ['resumo', 'resumo da semana', 'resumo do mês', 'resumo do mes', 'resumo total', 'resumo completo', 'me mostra o resumo', 'mostra o resumo', 'dashboard', 'kpis', 'estatísticas', 'estatisticas'],
         'status_lead' => ['status', 'atualizar status', 'mudar status'],

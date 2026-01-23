@@ -58,6 +58,11 @@ Route::middleware(['auth', 'verified', 'role:diretor'])
             ->name('admin.company.update');
     });
 
+// Onboarding
+Route::middleware(['auth', 'verified'])
+    ->get('/onboarding', [\App\Http\Controllers\OnboardingController::class, 'index'])
+    ->name('onboarding.index');
+
 // Gestão de usuários
 Route::middleware(['auth', 'role:diretor,corretor'])
     ->prefix('admin')

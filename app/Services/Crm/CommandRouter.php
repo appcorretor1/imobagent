@@ -169,14 +169,18 @@ class CommandRouter
                "Digite *sair* para voltar ao menu principal.";
     }
 
-    private function handleSair(WhatsappThread $thread): string
+    private function handleSair(WhatsappThread $thread): ?string
     {
         $context = $thread->context ?? [];
         unset($context['crm_mode'], $context['crm_last_lead'], $context['crm_last_deal']);
         $thread->context = $context;
         $thread->state = 'idle';
+        // Limpa também o empreendimento selecionado para forçar nova escolha
+        $thread->selected_empreendimento_id = null;
+        $thread->empreendimento_id = null;
         $thread->save();
 
-        return "✅ Saiu do assistente. Digite *menu* para ver opções principais.";
+        // Retorna null para que o WppController liste os empreendimentos
+        return null;
     }
 }

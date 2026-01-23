@@ -1023,7 +1023,46 @@ class ChatSimulatorController extends Controller
                 $router = new \App\Services\Crm\CommandRouter();
                 $assistente = new \App\Services\Crm\AssistenteService($parser, $router);
                 
+                // Verifica o intent antes de processar para detectar "sair"
+                $context = $thread->context ?? [];
+                $intent = $parser->parse($text, $context);
+                $isSairCommand = $intent->intent === 'sair';
+                
                 $resposta = $assistente->processar($thread, $corretor, $text);
+                
+                // Se for comando "sair", lista os empreendimentos
+                if ($isSairCommand && $resposta === null) {
+                    Log::info('Chat Simulator: Comando sair detectado, listando empreendimentos', [
+                        'phone' => $phone,
+                    ]);
+                    
+                    // Lista os empreendimentos para o usuário escolher
+                    $listMethod = $reflection->getMethod('sendEmpreendimentosList');
+                    $listMethod->setAccessible(true);
+                    $listMethod->invoke($wppController, $thread);
+                    
+                    return null;
+                }
+                
+                // Se a resposta for null, significa que o intent é desconhecido
+                if ($resposta === null) {
+                    // Sai do modo CRM e processa como pergunta normal
+                    unset($context['crm_mode']);
+                    $thread->context = $context;
+                    $thread->save();
+                    
+                    Log::info('Chat Simulator: Intent desconhecido no CRM, redirecionando para IA normal', [
+                        'phone' => $phone,
+                        'text' => $text,
+                    ]);
+                    
+                    // Processa como pergunta normal pela IA
+                    $handleAIMethod = $reflection->getMethod('handleNormalAIFlow');
+                    $handleAIMethod->setAccessible(true);
+                    $handleAIMethod->invoke($wppController, $thread, $text);
+                    
+                    return null;
+                }
                 
                 $sendTextMethod = $reflection->getMethod('sendText');
                 $sendTextMethod->setAccessible(true);

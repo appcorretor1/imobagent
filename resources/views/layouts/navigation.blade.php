@@ -84,6 +84,14 @@
                             Chat Simulador
                         </x-nav-link>
                     @endif
+
+                    {{-- Onboarding --}}
+                    <x-nav-link 
+                        :href="route('onboarding.index')"
+                        :active="request()->routeIs('onboarding.*')"
+                        class="{{ $navText }} {{ $navHover }} font-medium">
+                        📚 Guia
+                    </x-nav-link>
                 </div>
             </div>
 
@@ -120,6 +128,10 @@
                                     Dados da empresa
                                 </x-dropdown-link>
                             @endif
+
+                            <x-dropdown-link :href="route('onboarding.index')" class="text-gray-700">
+                                📚 Guia de Uso
+                            </x-dropdown-link>
 
                             <x-dropdown-link :href="route('profile.edit')" class="text-gray-700">
                                 Perfil
